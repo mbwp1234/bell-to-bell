@@ -1,0 +1,15 @@
+# Real data never lives in this repo. It lives in the app's data_dir on your own storage.
+data/
+Gradebook/
+Plans/
+state/
+school.json
+requests.json
+activity.jsonl
+*.local.*
+*.jpg
+*.jpeg
+*.heic
+*.pdf
+shots/
+.DS_Store
