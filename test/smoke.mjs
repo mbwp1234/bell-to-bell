@@ -26,12 +26,14 @@ W("school.json", { title: "Demo", classes: {
            project: [{ k: "recap", from: 0, to: 10, name: "Set up" }, { k: "build", from: 10, to: 40, name: "Build" }] },
   games: { g1: { name: "Demo Game", mins: "4 min", courses: ["alg"], how: ["Put a number up."] } }, prompts: { label: "Prompts", items: [{ title: "One", text: "Say one thing." }] } });
 W("Plans/week-07.json", { week: 7, label: "Week 7", startsOn: days[0].iso, endsOn: days[4].iso, days,
-  classes: { alg: { unit: "Unit 2", days: { mon: { focus: "Fractions <b>again</b>", warmup: "g1", exit: { q: "1/2 + 1/4?", a: "3/4" } } } }, art: { unit: "", days: { mon: { gap: true, focus: "?" } } } },
+  classes: { alg: { unit: "Unit 2", days: { mon: { focus: "Fractions <b>again</b>", warmup: "g1", exit: { q: "1/2 + 1/4?", a: "3/4" } }, tue: { focus: "Own folder", folder: "Lessons/Day {week}" }, wed: { focus: "Escape", folder: "../../etc" } } }, art: { unit: "", days: { mon: { gap: true, focus: "?" }, tue: { focus: "Paint", folder: "Art/Empty" } } } },
   prep: [{ id: "p1", text: "Copies" }] });
 W("Gradebook/courses/alg.json", { name: "Algebra", students: [{ id: "s1", name: "Quillon Example" }, { id: "s2", name: "Zephyrine Sample" }, { id: "s3", name: "Bramwell Test" }],
   columns: [{ id: "c1", week: 7, kind: "CW", title: "Fractions", outOf: 8, items: ["1a", "1b", "2a", "2b"] }, { id: "h1", week: 7, kind: "HW", title: "Homework" }] });
 W("Gradebook/marks/c1.json", { students: { s1: { status: "scored", pts: 6, outOf: 8, r: "2 2 1 1" }, s2: { status: "scored", pts: 4, outOf: 8, by: "claude", conf: "high", checked: false } } });
 W("Handouts/Week 7/sheet.pdf", "%PDF-1.4 fake");
+W("Handouts/Week 7/.hidden.pdf", "x"); W("Handouts/Week 7/notes.txt", "x"); W("Handouts/Week 7/a10.pdf", "x"); W("Handouts/Week 7/a9.pdf", "x");
+W("Lessons/Day 7/plan.pdf", "%PDF-1.4 fake"); fs.mkdirSync(path.join(D, "Art/Empty"), { recursive: true });
 W("outside-secret.txt", "nope");
 
 const PORT = 18000 + Math.floor(Math.random() * 1000);
@@ -50,7 +52,12 @@ try {
   ok(st.body.ok === true, "state ok");
   ok(st.body.week === 7, "current week found from dates");
   ok(st.body.plan && st.body.plan.classes.alg.unit === "Unit 2", "plan loaded");
-  ok(st.body.handouts.alg.files.length === 1 && st.body.handouts.alg.files[0] === "sheet.pdf", "handouts listed for the week folder");
+  const ha = st.body.handouts.alg;
+  ok(ha.dir === "Handouts/Week 7" && ha.files.join() === "a9.pdf,a10.pdf,sheet.pdf", "handouts listed for the week folder, documents only, natural order");
+  ok(ha.base === "Handouts", "class folder above the week is offered for copying");
+  ok(ha.days.tue && ha.days.tue.dir === "Lessons/Day 7" && ha.days.tue.files.join() === "plan.pdf", "a plan day's own folder is listed");
+  ok(!ha.days.wed, "a plan day's folder outside the data folder is dropped");
+  ok(!!st.body.handouts.art && st.body.handouts.art.dir === null && st.body.handouts.art.days.tue.files.length === 0 && !st.body.handouts.art.days.tue.missing, "a class with no folder still gets its day's folder, empty but present");
   ok(typeof st.body.hashes.c1.s1 === "string" && st.body.hashes.c1.s1.length === 12, "mark hashes sent");
   const h1 = st.body.hashes.c1.s1, h2 = st.body.hashes.c1.s2;
 
@@ -84,6 +91,7 @@ try {
 
   // files: only under the data folder
   let f = await fetch(B + "/api/file?p=" + encodeURIComponent("Handouts/Week 7/sheet.pdf")); ok(f.status === 200 && f.headers.get("content-type") === "application/pdf", "handout served");
+  ok((f.headers.get("content-disposition") || "").startsWith("inline;") && f.headers.get("content-disposition").includes("sheet.pdf"), "handout opens in the browser under its own name");
   f = await fetch(B + "/api/file?p=" + encodeURIComponent("../../etc/passwd")); ok(f.status === 400, "traversal refused");
   f = await fetch(B + "/api/file?p=" + encodeURIComponent("/etc/hosts")); ok(f.status === 400, "absolute path refused");
   f = await fetch(B + "/api/file?p=outside-secret.txt"); ok(f.status === 400, "non-document type refused");

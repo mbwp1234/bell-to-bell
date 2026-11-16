@@ -108,15 +108,30 @@ function currentWeek(ws, iso = todayISO()) {
   const next = ok.find(w => w.startsOn > iso);          // a weekend shows the coming week
   return next ? next.week : ok.length ? ok[ok.length - 1].week : null;
 }
+// A class's handouts folder, plus any plan day that names its own (`folder` on the day).
+// `base` is the class folder above the week, so "copy the class folder" has somewhere to point.
+const DOC_RE = /\.(pdf|png|jpe?g|webp|heic)$/i;
+async function listDir(rel) {
+  const abs = safePath(rel);
+  if (!abs) return null;
+  try { return { dir: rel, files: (await fs.readdir(abs)).filter(n => DOC_RE.test(n) && !n.startsWith(".")).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })) }; }
+  catch { return { dir: rel, files: [], missing: true }; }
+}
+const weekOf = (tpl, plan) => String(tpl).replace(/\{week\}/g, plan ? plan.week : "").replace(/\/+$/, "");
+const baseOf = tpl => String(tpl).split("/").filter(Boolean).filter((seg, i, a) => !a.slice(0, i + 1).some(x => x.includes("{week}"))).join("/");
 async function handouts(school, plan) {
   const out = {};
   for (const [k, c] of Object.entries(school.classes || {})) {
-    if (!c.folder) continue;
-    const rel = String(c.folder).replace("{week}", plan ? plan.week : "");
-    const abs = safePath(rel);
-    if (!abs) continue;
-    try { out[k] = { dir: rel, files: (await fs.readdir(abs)).filter(n => /\.(pdf|png|jpe?g|webp)$/i.test(n) && !n.startsWith(".")).sort() }; }
-    catch { out[k] = { dir: rel, files: [], missing: true }; }
+    const days = (plan && plan.classes && plan.classes[k] && plan.classes[k].days) || {};
+    const own = Object.entries(days).filter(([, d]) => d && typeof d.folder === "string" && d.folder);
+    if (!c.folder && !own.length) continue;
+    const h = c.folder ? await listDir(weekOf(c.folder, plan)) : null;
+    const o = h ? { ...h } : { dir: null, files: [] };
+    o.base = c.folder ? baseOf(c.folder) || null : null;
+    if (o.base === o.dir) o.base = null;
+    o.days = {};
+    for (const [dk, d] of own) { const x = await listDir(weekOf(d.folder, plan)); if (x) o.days[dk] = x; }
+    out[k] = o;
   }
   return out;
 }
@@ -153,9 +168,9 @@ function safePath(rel) {
 }
 
 /* ---------------- http helpers ---------------- */
-function send(res, code, body, type = "application/json") {
+function send(res, code, body, type = "application/json", extra = {}) {
   const buf = Buffer.isBuffer(body) ? body : Buffer.from(typeof body === "string" ? body : JSON.stringify(body));
-  res.writeHead(code, { "content-type": type, "cache-control": "no-store", "content-length": buf.length, "x-content-type-options": "nosniff" });
+  res.writeHead(code, { "content-type": type, "cache-control": "no-store", "content-length": buf.length, "x-content-type-options": "nosniff", ...extra });
   res.end(buf);
 }
 function raw(req, max) {
@@ -382,7 +397,7 @@ async function handle(req, res) {
     const abs = safePath(url.searchParams.get("p"));
     const ext = abs && path.extname(abs).slice(1).toLowerCase();
     if (!abs || !FILE_TYPES[ext]) return send(res, 400, { error: "bad_path" });
-    try { return send(res, 200, await fs.readFile(abs), FILE_TYPES[ext]); } catch { return send(res, 404, { error: "not_found" }); }
+    try { return send(res, 200, await fs.readFile(abs), FILE_TYPES[ext], { "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(path.basename(abs))}` }); } catch { return send(res, 404, { error: "not_found" }); }
   }
   if (req.method !== "GET" && !mounted()) return send(res, 503, { error: "not_mounted" });
 

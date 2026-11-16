@@ -30,6 +30,8 @@ const I = {
   l: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>',
   r: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>',
   check: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12l5 5L20 6"/></svg>',
+  copy: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg>',
+  open: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3h7v7"/><path d="M10 14 21 3"/><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/></svg>',
   folder: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
   cam: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>',
   eye: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
@@ -107,6 +109,29 @@ function rail(c, d) {
   return r && r.length ? r : [{ k: "class", from: 0, to: +c.len || 45, name: "Class", tag: "" }];
 }
 const overrideOf = (cls, day) => (S.d.overrides || {})[`week-${S.d.week}/${cls}/${day}`] || null;
+// Handouts for one class on one day: the day's own folder when the plan names one, else the
+// class's week folder. `copies` is every folder worth copying, nearest first, without repeats.
+function handFor(k, day) {
+  const h = (S.d.handouts || {})[k]; if (!h) return null;
+  const own = h.days && h.days[day], cur = own || h, wk = /\{week\}/.test(((school().classes || {})[k] || {}).folder || "");
+  const copies = [];
+  const add = (dir, label) => { if (dir && !copies.some(c => c.dir === dir)) copies.push({ dir, label }); };
+  add(cur.dir, own ? "Today's folder" : wk ? `Week ${S.d.week} folder` : "Class folder");
+  if (own) add(h.dir, wk ? `Week ${S.d.week} folder` : "Class folder");
+  add(h.base, "Class folder");
+  return { dir: cur.dir, files: cur.files || [], missing: !!cur.missing, copies };
+}
+// The path as the teacher's own computer sees it, from school.json's `folderRoot`.
+function folderPath(dir) {
+  const root = String(school().folderRoot || "").replace(/[\\/]+$/, "");
+  if (!root) return dir;
+  return root.includes("\\") ? root + "\\" + dir.replace(/\//g, "\\") : root + "/" + dir;
+}
+async function copyText(txt) {
+  try { await navigator.clipboard.writeText(txt); return true; } catch {}
+  try { const ta = document.createElement("textarea"); ta.value = txt; ta.setAttribute("readonly", ""); ta.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+    document.body.appendChild(ta); ta.select(); const ok = document.execCommand("copy"); ta.remove(); return ok; } catch { return false; }
+}
 const gameFor = (cls, day, d) => { const o = overrideOf(cls, day); const key = (o && o.warmup) || (d && d.warmup); return key ? { key, g: (school().games || {})[key], swapped: !!o } : null; };
 
 /* ---------------------------------------------------------------- gradebook */
@@ -367,7 +392,7 @@ function viewToday() {
     ? `<button class="btn inkb" data-act="grades-toggle" aria-pressed="true">${I.eye}Hide grades <span class="kbd">G</span></button>`
     : `<button class="btn" data-act="grades-toggle" aria-pressed="false">${I.eyeoff}Show grades <span class="kbd">G</span></button>`) : "";
 
-  const hand = (S.d.handouts || {})[it.k];
+  const hand = handFor(it.k, S.day);
   const steps = segs.map(s => {
     const t0 = it.start + s.from, state = isToday(S.day) ? (nowMin() >= it.start + s.to ? "past" : segNow && segNow.k === s.k ? "now" : "") : "";
     const progress = state === "now" ? `<div class="prog"><i style="width:${Math.round(100 * (off - s.from) / Math.max(1, s.to - s.from))}%"></i></div>` : "";
@@ -381,7 +406,7 @@ function viewToday() {
 
   const railCard = `<section class="card railcard">
     <div class="dayhead"><div><h2>${rich(d.focus || it.c.name)}</h2><div class="small muted" style="margin-top:3px">${esc(planUnit(it.k))}</div></div>
-      ${hand && hand.files.length ? `<button class="btn sunk noprint" data-act="handouts" data-cls="${it.k}">${I.folder}Handouts · ${hand.files.length}</button>` : ""}</div>
+      ${hand && hand.copies.length ? `<button class="btn sunk noprint" data-act="handouts" data-cls="${it.k}">${I.folder}${hand.files.length ? "Handouts · " + hand.files.length : "Folder"}</button>` : ""}</div>
     ${d.sub ? `<p class="lede small" style="margin:0 0 8px">${rich(d.sub)}</p>` : ""}
     ${steps}${watch}${gap}${dock}</section>`;
   const pane = gradesHere && S.gradesOpen ? `<section class="card gpane">${miniGrid(course, li.live && li.live.k === it.k ? needs(courseOf(course)).slice(0, 6).map(n => n.sid) : [])}
@@ -752,8 +777,13 @@ function renderSheet() {
        ${g && g.swapped ? `<button class="link" style="margin-top:12px" data-act="swap" data-v="" data-cls="${s.cls}">Back to the planned game</button>` : ""}`,
       `<p class="small muted" style="margin:0;text-align:center">A swap saves to this day on every device. Every game is under Week › Library.</p>`);
   } else if (s.t === "handouts") {
-    const h = (S.d.handouts || {})[s.cls] || { files: [] }, c = school().classes[s.cls];
-    html = sheetFrame(esc(h.dir || ""), `Handouts · ${esc(c.name)}`, `<div class="stack" style="gap:6px">${h.files.map(f => `<a class="btn sunk" style="justify-content:flex-start;width:100%" href="api/file?p=${encodeURIComponent(h.dir + "/" + f)}" target="_blank" rel="noopener">${I.folder}${esc(f)}</a>`).join("")}</div>`);
+    const h = handFor(s.cls, S.day) || { files: [], copies: [] }, c = school().classes[s.cls];
+    const files = h.files.length ? `<div class="stack" style="gap:6px">${h.files.map(f => `<a class="btn sunk" style="justify-content:flex-start;width:100%;text-align:left;white-space:normal" href="api/file?p=${encodeURIComponent(h.dir + "/" + f)}" target="_blank" rel="noopener">${I.open}<span style="flex:1;min-width:0;overflow-wrap:anywhere">${esc(f)}</span></a>`).join("")}</div>`
+      : `<p class="small muted" style="margin:0">${h.missing ? "This folder isn't there yet." : "No PDFs or pictures in this folder yet."}</p>`;
+    const copies = h.copies.map((x, i) => `<div class="row" style="flex-wrap:nowrap;margin-top:8px"><button class="btn sunk" style="flex:none" data-act="copyfolder" data-i="${i}" data-cls="${s.cls}">${I.copy}Copy</button>
+      <div style="min-width:0"><div class="small" style="font-weight:600">${esc(x.label)}</div><div class="small muted" style="font-family:var(--mono,ui-monospace,monospace);overflow-wrap:anywhere;user-select:all;-webkit-user-select:all">${esc(folderPath(x.dir))}</div></div></div>`).join("");
+    html = sheetFrame(esc(h.dir || ""), `Handouts · ${esc(c.name)}`, files + `<div class="k" style="margin:18px 0 0">Folder on the NAS</div>${copies}`,
+      `<p class="small muted" style="margin:0;text-align:center">Each file opens in a new tab, to read or print. A copied path pastes into Finder's Go to Folder (⇧⌘G).</p>`);
   } else if (s.t === "conflict") {
     const cf = S.conflicts[0]; if (!cf) { S.sheet = null; host.innerHTML = ""; return; }
     const f = findStudent(cf.sid), col = findCol(cf.col);
@@ -833,6 +863,8 @@ document.addEventListener("click", e => {
     case "score": openSheet({ t: "score", cls: t.dataset.cls }); break;
     case "warmup": openSheet({ t: "warmup", cls: t.dataset.cls }); break;
     case "handouts": openSheet({ t: "handouts", cls: t.dataset.cls }); break;
+    case "copyfolder": { const h = handFor(t.dataset.cls, S.day), x = h && h.copies[+t.dataset.i]; if (!x) break;
+      copyText(folderPath(x.dir)).then(ok => toast(ok ? x.label + " copied" : "Couldn't copy. Press and hold the path to select it.")); break; }
     case "swap": post("api/override", { week: S.d.week, cls: t.dataset.cls, day: S.day, warmup: v || null }, j => { S.d.overrides = j.overrides; toast(v ? "Warm-up swapped" : "Back to the planned game"); render(); }); break;
     case "excuse": { const col = colOf(cid), now = !colX(col); post("api/column", { col: cid, excused: now }, () => { (S.d.marks[cid] = S.d.marks[cid] || { students: {} }).excused = now; render(); }); break; }
     case "profedit": S.editProfile = true; render(); break;

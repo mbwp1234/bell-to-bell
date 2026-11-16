@@ -31,11 +31,14 @@ activity.jsonl                  one line per change
 `school.json` → `classes.<key>`: `name`, `short`, `kind` (a key of `rails`), `color` `[light, dark]`,
 `start` `"HH:MM"`, `len` minutes, `meets` `["mon",…]`, `course` (a gradebook course id or null),
 `folder` (handouts, relative, `{week}` is replaced).
+`folderRoot` (top level, optional): where your own computer sees the data folder (on a Mac,
+the mounted share's path). The Handouts sheet's **Copy** buttons copy `folderRoot` + the
+folder, so the path pastes straight into Finder (⇧⌘G) or Explorer. Without it they copy the relative path.
 `rails.<kind>`: `[{ k, from, to, name, tag }]` in minutes from the bell.
 
 A plan day (`Plans/week-NN.json` → `classes.<key>.days.<day>`) carries `focus`, `sub`, and one field
 per rail step key (`warm`, `board {cap, lines}`, `group`, `exit {q, a}`, …), plus `watch []`,
-`warmup` (a game key) and `gap: true` for a day without a plan. `<b>`, `<strong>`, `<em>` render.
+`warmup` (a game key), `folder` (that day's own handouts folder, relative, instead of the class's) and `gap: true` for a day without a plan. `<b>`, `<strong>`, `<em>` render.
 
 A mark: `status` (`scored missing absent excused nopage` / homework `done partial notin`), `pts`,
 `outOf` (2 × problems tried), `inc`, `note`, `r` (one code per item: `2` right, `1` method, `0`
