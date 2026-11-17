@@ -38,7 +38,7 @@ folder, so the path pastes straight into Finder (⇧⌘G) or Explorer. Without i
 
 A plan day (`Plans/week-NN.json` → `classes.<key>.days.<day>`) carries `focus`, `sub`, and one field
 per rail step key (`warm`, `board {cap, lines}`, `group`, `exit {q, a}`, …), plus `watch []`,
-`warmup` (a game key), `folder` (that day's own handouts folder, relative, instead of the class's) and `gap: true` for a day without a plan. `<b>`, `<strong>`, `<em>` render.
+`warmup` (a game key), `folder` (that day's own handouts folder, relative, instead of the class's), `print []` (what to print that day, shown as a Print box on the day card) and `gap: true` for a day without a plan. `<b>`, `<strong>`, `<em>` render.
 
 A mark: `status` (`scored missing absent excused nopage` / homework `done partial notin`), `pts`,
 `outOf` (2 × problems tried), `inc`, `note`, `r` (one code per item: `2` right, `1` method, `0`

@@ -130,6 +130,14 @@ try {
   try { const r = await fetch(`http://127.0.0.1:${port}/api/state`); ok(r.status === 403, "non-ingress request refused"); } finally { s2.kill(); }
 }
 
+// a plan day's print list is rendered on the day card, as a list, through rich()
+{
+  const src = fs.readFileSync(path.join(ROOT, "bell_to_bell/www/app.js"), "utf8");
+  ok(/const prints = Array\.isArray\(d\.print\)/.test(src), "print list read from the plan day");
+  ok(src.includes("${print}${steps}"), "print list placed on the day card");
+  ok(fs.readFileSync(path.join(ROOT, "bell_to_bell/www/index.html"), "utf8").includes(".printbox{"), "print list styled");
+}
+
 // the privacy gate: a planted term is refused, a missing denylist refuses everything
 {
   const dl = path.join(D, "deny.txt"), leak = path.join(D, "leak.txt");

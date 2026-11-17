@@ -1,3 +1,7 @@
+## 0.3.0
+- A plan day can carry `print`: a list of what to print for that class (file, pages, copies). It shows
+  as a **Print** box at the top of the day card, above the rail.
+
 ## 0.2.0
 - Handouts sheet: every file opens in a new tab to read or print (served inline, under its own name).
 - **Copy** buttons for the week's folder and the class folder, as the path your computer sees

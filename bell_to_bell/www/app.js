@@ -401,6 +401,9 @@ function viewToday() {
       <div class="m">${state === "now" ? (it.start + s.to - nowMin()) + "m left" : (s.to - s.from) + "m"}</div></div>`;
   }).join("");
   const watch = d.watch && d.watch.length ? `<div class="step"><div class="t"></div><div><div class="n" style="color:var(--warn-ink)">Watch for</div><ul class="watch">${d.watch.map(w => `<li>${rich(w)}</li>`).join("")}</ul></div><div></div></div>` : "";
+  // What to print for this class today: one line per handout, e.g. "<b>file.pdf</b> pages 1–2 · 10 copies".
+  const prints = Array.isArray(d.print) ? d.print.filter(Boolean) : d.print ? [d.print] : [];
+  const print = prints.length ? `<div class="printbox"><div class="n">Print</div><ul>${prints.map(x => `<li>${rich(x)}</li>`).join("")}</ul></div>` : "";
   const gap = d.gap ? `<div class="gap"><b style="color:var(--warn-ink)">Needs a plan</b><div class="small muted">${rich(school().gapNote || "Tell Claude where the class is and what's next.")}</div></div>${reqBox(`${S.d.week}/${it.k}`, it.c.name, "Where is the class? What's next?")}` : "";
   const dock = course && d.exit ? `<div class="dock noprint"><button class="btn primary block" data-act="score" data-cls="${it.k}">${I.check}Score the exit ticket</button></div>` : "";
 
@@ -408,7 +411,7 @@ function viewToday() {
     <div class="dayhead"><div><h2>${rich(d.focus || it.c.name)}</h2><div class="small muted" style="margin-top:3px">${esc(planUnit(it.k))}</div></div>
       ${hand && hand.copies.length ? `<button class="btn sunk noprint" data-act="handouts" data-cls="${it.k}">${I.folder}${hand.files.length ? "Handouts · " + hand.files.length : "Folder"}</button>` : ""}</div>
     ${d.sub ? `<p class="lede small" style="margin:0 0 8px">${rich(d.sub)}</p>` : ""}
-    ${steps}${watch}${gap}${dock}</section>`;
+    ${print}${steps}${watch}${gap}${dock}</section>`;
   const pane = gradesHere && S.gradesOpen ? `<section class="card gpane">${miniGrid(course, li.live && li.live.k === it.k ? needs(courseOf(course)).slice(0, 6).map(n => n.sid) : [])}
     <p class="small muted" style="margin:10px 0 0">Grades hide themselves when the next class starts, so they never open on the projector.</p></section>` : "";
   return head({ eyebrow: `${esc(dayMeta.label)}${isToday(S.day) ? " · today" : ""} · ${esc(p.label || "Week " + S.d.week)}${p.note ? " · " + esc(p.note) : ""}`,
