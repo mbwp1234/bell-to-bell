@@ -224,6 +224,51 @@ function classStats(c) {
   return { acc: st.length ? st.reduce((a, x) => a + x.avg, 0) / st.length : null, att: st.length ? st.reduce((a, x) => a + (x.att ?? 0), 0) / st.length : null };
 }
 
+/* ---------------------------------------------------------------- homework */
+// A homework column carries `assigned` (handed out) and `due` (collected). Today prompts for
+// both, and for anything from the last two weeks that is still out or was never checked in.
+const isoAdd = (iso, n) => { const d = new Date(iso + "T12:00:00"); d.setDate(d.getDate() + n); return isoOf(d); };
+const dayIso = day => (planDays().find(x => x.key === day) || {}).iso || null;
+const niceDate = iso => new Date(iso + "T12:00:00").toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+function dueTxt(due, from) {
+  if (!due) return "no due date";
+  if (due === from) return "due today";
+  if (due === isoAdd(from, 1)) return "due tomorrow";
+  return "due " + niceDate(due);
+}
+function nextMeet(k, iso) {
+  const c = (school().classes || {})[k]; if (!c) return isoAdd(iso, 1);
+  for (let i = 1; i <= 14; i++) { const d = isoAdd(iso, i); if ((c.meets || []).includes(DAYKEYS[new Date(d + "T12:00:00").getDay()])) return d; }
+  return isoAdd(iso, 1);
+}
+function hwTally(c, col) {
+  const t = { done: 0, partial: 0, notin: 0, absent: 0, excused: 0, marked: 0, out: [] };
+  for (const s of c.students) { const m = mark(col.id, s.id); if (!m || t[m.status] == null) continue; t[m.status]++; t.marked++; if (m.status === "notin") t.out.push(s); }
+  return t;
+}
+function hwFor(k, day) {
+  const cl = (school().classes || {})[k], cid = cl && cl.course, c = cid && courseOf(cid), iso = dayIso(day);
+  if (!c || !iso) return null;
+  const cols = c.columns.filter(x => isComp(x) && !colX(x));
+  const collect = cols.filter(x => x.due === iso).map(col => ({ col, t: hwTally(c, col) }));
+  const assign = cols.filter(x => x.assigned === iso);
+  const owed = cols.filter(x => x.due && x.due < iso && x.due >= isoAdd(iso, -14)).map(col => ({ col, t: hwTally(c, col) })).filter(o => o.t.notin || !o.t.marked);
+  return { cid, c, iso, collect, assign, owed };
+}
+function hwBox(k, day, showNames) {
+  const h = hwFor(k, day); if (!h) return "";
+  const ro = S.save === "ro" ? " disabled" : "";
+  const rows = [];
+  for (const { col, t } of h.collect) rows.push(`<div class="hwr"><div><span class="hwk">Collect</span> ${esc(col.title)}<div class="small muted">${t.marked ? `${t.marked} of ${h.c.students.length} checked in` : "Nobody checked in yet"}${t.notin ? ` · ${t.notin} not in` : ""}</div></div><button class="btn sunk" data-act="hwin" data-cid="${col.id}"${ro}>${I.check}Check in</button></div>`);
+  for (const col of h.assign) rows.push(`<div class="hwr"><div><span class="hwk">Hand out</span> ${esc(col.title)}<div class="small muted">${esc(dueTxt(col.due, h.iso))}</div></div><button class="link small" data-act="sheetcol" data-cid="${col.id}">Open</button></div>`);
+  for (const { col, t } of h.owed) {
+    const who = !t.marked ? "Never checked in" : showNames ? t.out.map(s => esc(first(s.name))).join(", ") + " not in" : `${t.notin} not in`;
+    rows.push(`<div class="hwr owed"><div><span class="hwk">Still out</span> ${esc(col.title)}<div class="small">${who} · was ${esc(dueTxt(col.due, h.iso))}</div></div><button class="btn sunk" data-act="hwin" data-cid="${col.id}"${ro}>Check in</button></div>`);
+  }
+  return `<div class="hwbox noprint"><div class="row" style="justify-content:space-between"><div class="n">Homework</div><button class="link small" data-act="hwnew" data-cls="${k}"${ro}>+ Set homework</button></div>
+    ${rows.join("") || '<div class="small muted" style="margin-top:4px">Nothing to collect or hand out.</div>'}</div>`;
+}
+
 /* ---------------------------------------------------------------- saving */
 // Local copy of the server's rule, so the screen changes before the network answers.
 function localApply(o) {
@@ -368,8 +413,8 @@ function viewToday() {
   const daysBar = days.length ? `<div class="days" role="group" aria-label="Day">${days.map(d =>
     `<button data-act="day" data-v="${d.key}" aria-pressed="${d.key === S.day}" class="${isToday(d.key) ? "today" : ""}">${esc(d.label)}<small>${esc(d.date || "")}</small></button>`).join("")}</div>` : "";
   const strip = list.length ? `<div class="strip" role="group" aria-label="Classes">${list.map(x => {
-    const live = li.live && li.live.k === x.k;
-    return `<button class="pill${live ? " live" : ""}" data-act="cls" data-v="${x.k}" aria-pressed="${x.k === S.cls && !live}"><span class="a">${clock(x.start)}${live ? " · now" : ""}</span><span class="b"><span class="cdot" style="background:${ccol(x.c)}"></span>${esc(x.c.short || x.c.name)}</span></button>`;
+    const live = li.live && li.live.k === x.k, hw = hwFor(x.k, S.day), hwn = hw ? hw.collect.length + hw.assign.length : 0;
+    return `<button class="pill${live ? " live" : ""}" data-act="cls" data-v="${x.k}" aria-pressed="${x.k === S.cls && !live}"><span class="a">${clock(x.start)}${live ? " · now" : ""}${hwn ? ' · <span class="hwt">HW</span>' : ""}</span><span class="b"><span class="cdot" style="background:${ccol(x.c)}"></span>${esc(x.c.short || x.c.name)}</span></button>`;
   }).join("")}</div>` : "";
 
   if (!p) return head({ eyebrow: "No plan", title: "Nothing planned yet", lede: "There's no week file in the Plans folder for this week. Ask Claude to plan it." }) + reqBox("week", "This week", "What should this week cover?");
@@ -411,7 +456,7 @@ function viewToday() {
     <div class="dayhead"><div><h2>${rich(d.focus || it.c.name)}</h2><div class="small muted" style="margin-top:3px">${esc(planUnit(it.k))}</div></div>
       ${hand && hand.copies.length ? `<button class="btn sunk noprint" data-act="handouts" data-cls="${it.k}">${I.folder}${hand.files.length ? "Handouts · " + hand.files.length : "Folder"}</button>` : ""}</div>
     ${d.sub ? `<p class="lede small" style="margin:0 0 8px">${rich(d.sub)}</p>` : ""}
-    ${print}${steps}${watch}${gap}${dock}</section>`;
+    ${print}${hwBox(it.k, S.day, showNames)}${steps}${watch}${gap}${dock}</section>`;
   const pane = gradesHere && S.gradesOpen ? `<section class="card gpane">${miniGrid(course, li.live && li.live.k === it.k ? needs(courseOf(course)).slice(0, 6).map(n => n.sid) : [])}
     <p class="small muted" style="margin:10px 0 0">Grades hide themselves when the next class starts, so they never open on the projector.</p></section>` : "";
   return head({ eyebrow: `${esc(dayMeta.label)}${isToday(S.day) ? " · today" : ""} · ${esc(p.label || "Week " + S.d.week)}${p.note ? " · " + esc(p.note) : ""}`,
@@ -473,8 +518,9 @@ function viewWeek() {
   const planHTML = `<div class="stack">${planDays().map(d => {
     const list = dayList(d.key);
     return `<section class="card" style="${isToday(d.key) ? "box-shadow:inset 0 0 0 2px var(--accent)" : ""}"><div class="row" style="justify-content:space-between"><b>${esc(d.label)} ${esc(d.date || "")}${isToday(d.key) ? " · today" : ""}</b><span class="small muted">${list.length} class${list.length === 1 ? "" : "es"}</span></div>
-      ${list.map(x => { const pd = planDay(x.k, d.key); const g = !pd || pd.gap;
-        return `<button class="wr" data-act="openday" data-day="${d.key}" data-cls="${x.k}"><span class="t">${clock(x.start)}</span><span class="cdot" style="background:${ccol(x.c)}"></span><span><b>${esc(x.c.short || x.c.name)}</b> · ${g ? `<span class="gapt">needs a plan</span>` : rich(pd.focus || "")}</span></button>`; }).join("") || '<div class="small muted" style="padding:8px 0">No classes.</div>'}</section>`;
+      ${list.map(x => { const pd = planDay(x.k, d.key); const g = !pd || pd.gap, hw = hwFor(x.k, d.key);
+        const tags = hw ? [hw.collect.length ? "collect HW" : "", hw.assign.length ? "hand out HW" : ""].filter(Boolean) : [];
+        return `<button class="wr" data-act="openday" data-day="${d.key}" data-cls="${x.k}"><span class="t">${clock(x.start)}</span><span class="cdot" style="background:${ccol(x.c)}"></span><span><b>${esc(x.c.short || x.c.name)}</b> · ${g ? `<span class="gapt">needs a plan</span>` : rich(pd.focus || "")}${tags.length ? ` <span class="hwt">${tags.join(" · ")}</span>` : ""}</span></button>`; }).join("") || '<div class="small muted" style="padding:8px 0">No classes.</div>'}</section>`;
   }).join("")}${gapCls.map(x => reqBox(`${S.d.week}/${x.k}`, x.c.name, "Where is the class? What's next?")).join("")}</div>`;
   const ticks = (S.d.prep || {})["week-" + S.d.week] || {};
   const prep = p.prep || [];
@@ -770,6 +816,24 @@ function renderSheet() {
         return `<div class="xrow"><span style="font-size:15px;font-weight:600">${esc(st.name)}</span><div class="xseg">${[["r", "✓", "Right"], ["h", "½", "Half"], ["w", "✗", "Wrong"], ["a", "–", "Away"]].map(([k, t, l]) => `<button class="${k}" data-act="xtscore" data-v="${k}" data-sid="${st.id}" data-cls="${s.cls}" aria-pressed="${v === k}" aria-label="${esc(st.name)}: ${l}">${t}</button>`).join("")}</div></div>`; }).join("")}`;
     html = sheetFrame(`Exit ticket · ${esc(it.c.name)}`, rich(d.focus || "Exit ticket"), body,
       `<p class="small muted" style="margin:0;text-align:center">${scored} of ${c.students.length} scored. Each tap saves. Unscored tickets stay blank, never zero.</p><button class="btn primary block" data-act="close">Done</button>`);
+  } else if (s.t === "hwin") {
+    const f = findCol(s.cid); if (!f) { S.sheet = null; host.innerHTML = ""; return; }
+    const { c, col } = f, t = hwTally(c, col), left = c.students.length - t.marked;
+    const opts = [["done", "✓", "Done"], ["partial", "½", "Partial"], ["notin", "✗", "Not in"], ["absent", "–", "Away"]];
+    const body = `<div class="row small muted" style="justify-content:space-between;font-weight:600;margin-bottom:4px"><span>Tap as they hand it in</span><span style="display:flex;gap:4px;padding-right:4px">${opts.map(o => `<span style="width:52px;text-align:center">${o[2]}</span>`).join("")}</span></div>
+      ${c.students.map(st => { const m = mark(col.id, st.id) || {};
+        return `<div class="xrow"><span style="font-size:15px;font-weight:600">${esc(st.name)}</span><div class="xseg hwseg">${opts.map(([v, tx, l]) => `<button class="${v}" data-act="hwset" data-v="${v}" data-sid="${st.id}" data-cid="${col.id}" aria-pressed="${m.status === v}" aria-label="${esc(st.name)}: ${l}">${tx}</button>`).join("")}</div></div>`; }).join("")}`;
+    html = sheetFrame(`Homework · ${esc(c.name)} · ${esc(dueTxt(col.due, isoOf()))}`, esc(col.title), body,
+      `<p class="small muted" style="margin:0;text-align:center">${t.marked} of ${c.students.length} checked in. Each tap saves. Nobody is marked until you tap.</p>
+       ${left ? `<div class="row" style="flex-wrap:nowrap"><button class="btn sunk" style="flex:1" data-act="hwrest" data-v="done" data-cid="${col.id}">${t.marked ? "The other " + left : "All " + left}: done</button><button class="btn sunk" style="flex:1" data-act="hwrest" data-v="notin" data-cid="${col.id}">${t.marked ? "The other " + left : "All " + left}: not in</button></div>` : ""}
+       <button class="btn primary block" data-act="close">Done</button>`);
+  } else if (s.t === "hwnew") {
+    const cl = school().classes[s.cls], iso = dayIso(S.day) || isoOf(), due = nextMeet(s.cls, iso);
+    html = sheetFrame(`Homework · ${esc(cl.name)}`, "Set homework",
+      `<div class="stack"><label class="k" for="hwt">What it is</label><input type="text" id="hwt" placeholder="e.g. Workbook pg 52–53" maxlength="120" enterkeyhint="done">
+        <label class="k" for="hwd">Due</label><input type="date" id="hwd" value="${due}" min="${iso}">
+        <p class="small muted" style="margin:0">Handed out ${esc(niceDate(iso))}. It shows on this day as <b>Hand out</b>, and on the due day as <b>Collect</b>, with a check-in list. Completion only.</p></div>`,
+      `<button class="btn primary block" data-act="hwsave" data-cls="${s.cls}">Save homework</button>`);
   } else if (s.t === "warmup") {
     const it = dayList(S.day).find(x => x.k === s.cls), d = planDay(s.cls, S.day) || {}, g = gameFor(s.cls, S.day, d);
     const cur = g && g.g, course = it.c.course;
@@ -864,6 +928,17 @@ document.addEventListener("click", e => {
     case "xt": { const col = colOf(cid); writeMark(col, sid, { pts: v === "r" ? 2 : v === "h" ? 1 : 0, outOf: 2 }); break; }
     case "xtscore": scoreXT(t.dataset.cls, sid, v); break;
     case "score": openSheet({ t: "score", cls: t.dataset.cls }); break;
+    case "hwin": openSheet({ t: "hwin", cid }); break;
+    case "hwnew": openSheet({ t: "hwnew", cls: t.dataset.cls }); break;
+    case "hwset": { const col = colOf(cid), m = mark(cid, sid) || {}, f = findStudent(sid); if (m.status === v) break;
+      writeMark(col, sid, { status: v }, { toast: `${first(f && f.s.name)} · ${LABEL[v]} · saved` }); break; }
+    case "hwrest": { const f = findCol(cid), rest = f.c.students.filter(st => !mark(cid, st.id));
+      writeMany(rest.map(st => ({ col: f.col, sid: st.id, patch: { status: v } }))); toast(`${rest.length} marked ${LABEL[v].toLowerCase()}`); break; }
+    case "hwsave": { const cls = t.dataset.cls, cl = school().classes[cls], title = ((document.getElementById("hwt") || {}).value || "").trim(), due = (document.getElementById("hwd") || {}).value || "";
+      const assigned = dayIso(S.day) || isoOf();
+      if (!title) { toast("Say what the homework is"); break; }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(due) || due < assigned) { toast("Pick a due date on or after today"); break; }
+      post("api/hw", { course: cl.course, title, due, assigned, week: S.d.week }, j => { const c = courseOf(cl.course); if (c && !c.columns.some(x => x.id === j.col.id)) c.columns.push(j.col); closeSheet(); toast(`Set · ${dueTxt(due, assigned)}`); }); break; }
     case "warmup": openSheet({ t: "warmup", cls: t.dataset.cls }); break;
     case "handouts": openSheet({ t: "handouts", cls: t.dataset.cls }); break;
     case "copyfolder": { const h = handFor(t.dataset.cls, S.day), x = h && h.copies[+t.dataset.i]; if (!x) break;

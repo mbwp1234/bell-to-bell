@@ -40,6 +40,11 @@ A plan day (`Plans/week-NN.json` → `classes.<key>.days.<day>`) carries `focus`
 per rail step key (`warm`, `board {cap, lines}`, `group`, `exit {q, a}`, …), plus `watch []`,
 `warmup` (a game key), `folder` (that day's own handouts folder, relative, instead of the class's), `print []` (what to print that day, shown as a Print box on the day card) and `gap: true` for a day without a plan. `<b>`, `<strong>`, `<em>` render.
 
+A homework column (`kind` `HW` or `XP`, in the course file) may carry `assigned` and `due`
+(`YYYY-MM-DD`). On Today, the class's day card says **Hand out** on `assigned` and **Collect** on
+`due`, with a Check in list, and **Still out** for the last two weeks' homework that has students
+not in or was never checked in. **+ Set homework** on the card writes a new one.
+
 A mark: `status` (`scored missing absent excused nopage` / homework `done partial notin`), `pts`,
 `outOf` (2 × problems tried), `inc`, `note`, `r` (one code per item: `2` right, `1` method, `0`
 wrong, `-` blank), and `by`/`at`/`checked`/`conf`. A mark written by another tool with

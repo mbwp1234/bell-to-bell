@@ -101,6 +101,17 @@ try {
   await j("POST", "/api/xt", { course: "alg", date: days[0].iso, week: 7 });
   ok(JSON.parse(fs.readFileSync(path.join(D, "Gradebook/courses/alg.json"), "utf8")).columns.filter(c => c.kind === "XT").length === 1, "exit ticket column added once");
 
+  // homework set from the day card becomes a completion column with both dates
+  r = await j("POST", "/api/hw", { course: "alg", title: "Workbook pg 9", assigned: days[0].iso, due: days[1].iso, week: 7 });
+  ok(r.status === 200 && r.body.col.kind === "HW" && r.body.col.assigned === days[0].iso && r.body.col.due === days[1].iso && r.body.col.outOf === null, "homework column created with assigned and due");
+  ok(/^hw-alg-/.test(r.body.col.id), "homework column id names the course");
+  ok(JSON.parse(fs.readFileSync(path.join(D, "Gradebook/courses/alg.json"), "utf8")).columns.some(c => c.id === r.body.col.id), "homework column written to the course");
+  r = await j("POST", "/api/marks", { ops: [{ col: r.body.col.id, sid: "s1", patch: { status: "notin" } }] }); ok(r.body.results[0].ok === true, "homework checked in");
+  r = await j("POST", "/api/hw", { course: "alg", title: "Backwards", assigned: days[1].iso, due: days[0].iso }); ok(r.status === 400, "homework due before it's set is refused");
+  r = await j("POST", "/api/hw", { course: "alg", title: " ", assigned: days[0].iso, due: days[1].iso }); ok(r.status === 400, "homework with no title is refused");
+  r = await j("POST", "/api/hw", { course: "nope", title: "x", assigned: days[0].iso, due: days[1].iso }); ok(r.status === 404, "homework for a missing course is refused");
+  ok(fs.readFileSync(path.join(D, "activity.jsonl"), "utf8").includes('"did":"assigned"'), "setting homework is logged");
+
   r = await j("POST", "/api/column", { col: "c1", excused: true, sheetNote: "most missed 2b" }); ok(r.body.doc.excused === true && r.body.doc.students.s1.pts === 5, "column patch keeps the marks");
   r = await j("POST", "/api/prep", { week: 7, id: "p1", on: true }); ok(!!r.body.prep["week-7"].p1, "prep tick saved");
   r = await j("POST", "/api/override", { week: 7, cls: "alg", day: "mon", warmup: "g1" }); ok(r.body.overrides["week-7/alg/mon"].warmup === "g1", "warm-up swap saved");
@@ -134,8 +145,18 @@ try {
 {
   const src = fs.readFileSync(path.join(ROOT, "bell_to_bell/www/app.js"), "utf8");
   ok(/const prints = Array\.isArray\(d\.print\)/.test(src), "print list read from the plan day");
-  ok(src.includes("${print}${steps}"), "print list placed on the day card");
+  ok(src.includes("${print}${hwBox("), "print list placed on the day card");
   ok(fs.readFileSync(path.join(ROOT, "bell_to_bell/www/index.html"), "utf8").includes(".printbox{"), "print list styled");
+}
+
+// homework prompts are wired into Today, the week and the sheets
+{
+  const src = fs.readFileSync(path.join(ROOT, "bell_to_bell/www/app.js"), "utf8");
+  ok(src.includes("${print}${hwBox(it.k, S.day, showNames)}${steps}"), "homework box placed on the day card");
+  for (const t of ['s.t === "hwin"', 's.t === "hwnew"', 'case "hwin":', 'case "hwnew":', 'case "hwset":', 'case "hwrest":', 'case "hwsave":']) ok(src.includes(t), "homework wiring: " + t);
+  ok(/rest = f\.c\.students\.filter\(st => !mark\(cid, st\.id\)\)/.test(src), "'the rest' only touches students with no mark yet");
+  ok(/showNames \? t\.out\.map/.test(src), "names of who owes homework only show when grades may");
+  ok(fs.readFileSync(path.join(ROOT, "bell_to_bell/server.mjs"), "utf8").includes("await homeworkLine(x.c.course"), "bell heads-up carries the homework line");
 }
 
 // the privacy gate: a planted term is refused, a missing denylist refuses everything

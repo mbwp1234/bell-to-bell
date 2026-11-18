@@ -265,6 +265,25 @@ async function ensureExitTicket(b) {
     return id;
   });
 }
+// Homework the teacher sets from the day card. `assigned` is the day it's handed out and
+// `due` the day it's collected; both drive the prompts on Today. Completion only, so no outOf.
+const ISO = /^\d{4}-\d{2}-\d{2}$/;
+async function addHomework(b, by) {
+  const title = (str(b.title, 120) || "").trim();
+  if (!ID.test(b.course || "") || !title || !ISO.test(b.due || "") || !ISO.test(b.assigned || "") || b.due < b.assigned) throw bad("bad_hw");
+  const id = `hw-${b.course}-${b.assigned}-${crypto.randomBytes(2).toString("hex")}`;
+  const col = await serial(async () => {
+    const file = path.join(COURSES, b.course + ".json");
+    const c = await readJSON(file);
+    if (!c || !Array.isArray(c.columns)) throw Object.assign(new Error("no_such_course"), { code: 404 });
+    const col = { id, week: Number.isFinite(+b.week) ? +b.week : null, kind: "HW", title, assigned: b.assigned, due: b.due, outOf: null };
+    c.columns.push(col);
+    await writeJSON(file, c);
+    return col;
+  });
+  await log({ by, did: "assigned", what: `${b.course}: ${title}, due ${b.due}`, n: 1 });
+  return col;
+}
 async function profilePut(b, by) {
   if (!ID.test(b.sid || "") || !isObj(b.data)) throw bad("bad_profile");
   const list = v => Array.isArray(v) ? v.map(s => String(s).trim().slice(0, 80)).filter(Boolean).slice(0, 20) : [];
@@ -340,6 +359,17 @@ async function today() {
     .sort((a, b) => a.start - b.start);
   return { school, plan, day, list };
 }
+// "Collect: Pg 40 · Hand out: Pg 44" for the bell heads-up, or "" when there's none.
+async function homeworkLine(course, iso) {
+  if (!course || !ID.test(course)) return "";
+  const c = await readJSON(path.join(COURSES, course + ".json")).catch(() => null);
+  const cols = ((c && c.columns) || []).filter(x => x.kind === "HW" || x.kind === "XP");
+  const bits = [];
+  const due = cols.filter(x => x.due === iso).map(x => x.title), out = cols.filter(x => x.assigned === iso).map(x => x.title);
+  if (due.length) bits.push("Collect: " + due.join(", "));
+  if (out.length) bits.push("Hand out: " + out.join(", "));
+  return bits.join(" · ");
+}
 let lastSensor = "", lastSensorAt = 0; const rung = new Set();
 async function ha(method, p, data) {
   if (!HA_API) return null;
@@ -375,8 +405,10 @@ async function tickClock() {
     const key = todayISO() + x.k;
     if (rung.has(key) || m !== x.start - BELL_MIN) continue;
     rung.add(key);
+    const hw = await homeworkLine(x.c.course, todayISO()).catch(() => "");
+    const message = String((x.d && x.d.focus) || x.c.name).replace(/<[^>]+>/g, "") + (hw ? "\n" + hw : "");
     for (const svc of BELL_NOTIFY) ha("POST", "/services/notify/" + svc, {
-      title: `${x.c.name} in ${BELL_MIN} min`, message: (x.d && x.d.focus) || x.c.name, data: { tag: "btb-bell" } })
+      title: `${x.c.name} in ${BELL_MIN} min`, message, data: { tag: "btb-bell" } })
       .catch(e => console.error("notify", e.message));
   }
 }
@@ -403,6 +435,7 @@ async function handle(req, res) {
 
   if (req.method === "POST" && p === "/api/marks") { const b = await body(req); return send(res, 200, { ok: true, results: await markOps(b.ops, by) }); }
   if (req.method === "POST" && p === "/api/column") return send(res, 200, { ok: true, doc: await columnPatch(await body(req)) });
+  if (req.method === "POST" && p === "/api/hw") return send(res, 200, { ok: true, col: await addHomework(await body(req), by) });
   if (req.method === "POST" && p === "/api/xt") return send(res, 200, { ok: true, col: await ensureExitTicket(await body(req)) });
   if (req.method === "PUT" && p === "/api/profile") return send(res, 200, await profilePut(await body(req), by));
   if (req.method === "POST" && p === "/api/prep") return send(res, 200, { ok: true, prep: await prepTick(await body(req)) });
