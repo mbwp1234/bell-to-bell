@@ -378,6 +378,22 @@ async function ha(method, p, data) {
   if (!r.ok) throw new Error(`HA ${method} ${p} -> ${r.status}`);
   return r;
 }
+// sun.sun for the theme: dim while the sun is up, night after sunset. {} when HA can't say,
+// so the page falls back to following the device rather than guessing day.
+let sunCache = null, sunAt = 0;
+async function sun() {
+  if (!HA_API) return {};
+  if (sunCache && Date.now() - sunAt < 300e3) return sunCache;
+  try {
+    const j = await (await ha("GET", "/states/sun.sun")).json();
+    const t = v => { const n = Date.parse(v); return Number.isFinite(n) ? n : null; };
+    if (j.state === "above_horizon" || j.state === "below_horizon") {
+      sunCache = { state: j.state, rising: t(j.attributes && j.attributes.next_rising), setting: t(j.attributes && j.attributes.next_setting) };
+      sunAt = Date.now();
+    }
+  } catch (e) { console.error("sun", e.message); }
+  return sunCache || {};
+}
 async function tickClock() {
   if (!HA_API) return;
   const t = await today().catch(() => null);
@@ -424,6 +440,7 @@ async function handle(req, res) {
   if (req.method === "GET" && (p === "/" || p === "/index.html")) return send(res, 200, PAGE, "text/html; charset=utf-8");
   if (req.method === "GET" && p === "/app.js") return send(res, 200, APPJS, "text/javascript; charset=utf-8");
   if (req.method === "GET" && p === "/api/rev") return send(res, 200, { rev: mounted() ? await revision() : null, now: Date.now() });
+  if (req.method === "GET" && p === "/api/sun") return send(res, 200, await sun());
   if (req.method === "GET" && p === "/api/state") return send(res, 200, await state(url.searchParams.has("week") ? +url.searchParams.get("week") : null));
   if (req.method === "GET" && p === "/api/file") {
     const abs = safePath(url.searchParams.get("p"));

@@ -1,3 +1,10 @@
+## 0.5.0
+- **Lighter by day.** New light theme (Mist: soft grey-green, off-white cards) replaces the bright
+  white one. A device in dark mode now gets **Dim**, Mist one step darker, while the sun is up,
+  and the old dark theme only after sunset, from HA's `sun.sun` (new `GET api/sun`). It flips at
+  sunset and sunrise without a reload.
+- A **theme button** in the header: Auto / Light / Dim / Night, kept per device.
+
 ## 0.4.0
 - **Homework on Today.** Each gradebook class's day card has a Homework box: **Hand out** on the
   day a homework column's `assigned` date falls, **Collect** on its `due` date (with how many are

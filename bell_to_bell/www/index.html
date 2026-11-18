@@ -4,24 +4,62 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Bell to Bell</title>
+<script>
+/* Theme, set before the first paint. Auto: device light -> light; device dark -> dim while the
+   sun is up, night after sunset. Sunset comes from HA's sun.sun via api/sun, cached in
+   localStorage; with no sun reading yet a dark device gets night, as before. */
+(function () {
+  var mq = matchMedia("(prefers-color-scheme: dark)"), root = document.documentElement;
+  function get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function sunDown() {
+    var s = null; try { s = JSON.parse(get("btb.sun") || "null"); } catch (e) {}
+    if (!s || (s.state !== "above_horizon" && s.state !== "below_horizon")) return null;
+    var now = Date.now(), down = s.state === "below_horizon";
+    if (down && s.rising && now >= s.rising) down = false;
+    else if (!down && s.setting && now >= s.setting) down = true;
+    return down;
+  }
+  function pick() {
+    var m = get("btb.theme");
+    if (m === "light" || m === "dim" || m === "night") return m;
+    if (!mq.matches) return "light";
+    return sunDown() === false ? "dim" : "night";
+  }
+  function apply() { var t = pick(), was = root.dataset.theme; root.dataset.theme = t; return t !== was; }
+  apply();
+  window.btbTheme = { apply: apply, pick: pick, mq: mq, mode: function () { return get("btb.theme") || "auto"; } };
+})();
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
 <style>
+/* Three themes, picked in the head script: light (Mist), dim (Mist one step down, for a device
+   in dark mode while the sun is up) and night (after sunset). The script always sets data-theme. */
 :root{
-  --bg:#F4F6F5;--surface:#FFFFFF;--sunk:#E4EAE8;--sunk2:#EEF1F0;--line:#EAEFED;--line2:#D5DDDB;
-  --fg:#0F1C1A;--fg2:#3E4F4C;--muted:#556563;--faint:#6B7B78;
-  --accent:#07564A;--accent-ink:#07564A;--on-accent:#FFFFFF;--accent-soft:#E1EEEA;
-  --live:#B0421F;--low:#A23A19;--ok:#2F8A78;--amber:#F2A63C;
-  --warn-soft:#FAF0E4;--warn-ink:#7A3F0C;--warn-line:#F1DEC6;--bad-soft:#FBE7E1;--bad-ink:#7A2A12;
-  --ink:#0F1C1A;--on-ink:#FFFFFF;--done:#334743;
-  --q1:#07564A;--q2:#2F8A78;--q3:#8CC5B8;--q4:#F2A63C;--q5:#B0421F;
-  --q1t:#07564A33;--q2t:#2F8A7833;--q3t:#8CC5B855;--q4t:#F2A63C40;--q5t:#B0421F33;
-  --scrim:rgba(15,28,26,.42);--shadow:0 10px 40px rgba(0,0,0,.18);
+  --bg:#DCE4E1;--surface:#F1F5F3;--sunk:#CFD9D5;--sunk2:#E5ECE9;--line:#D6DFDB;--line2:#BECBC6;
+  --fg:#13201E;--fg2:#33433F;--muted:#4B5B57;--faint:#53625E;
+  --accent:#0B5E51;--accent-ink:#0B5E51;--on-accent:#FFFFFF;--accent-soft:#D2E5DF;
+  --live:#A63D1C;--low:#9A3719;--ok:#2B7F6E;--amber:#E39A33;
+  --warn-soft:#F1E5D3;--warn-ink:#6E3A0D;--warn-line:#E3D2BA;--bad-soft:#F3DDD5;--bad-ink:#74280F;
+  --ink:#13201E;--on-ink:#FFFFFF;--done:#33433F;
+  --q1:#0B5E51;--q2:#2F8A78;--q3:#8CC5B8;--q4:#F2A63C;--q5:#B0421F;
+  --q1t:#0B5E5133;--q2t:#2F8A7833;--q3t:#8CC5B855;--q4t:#F2A63C40;--q5t:#B0421F33;
+  --scrim:rgba(19,32,30,.42);--shadow:0 10px 40px rgba(0,0,0,.18);
   --sans:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;--mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
   color-scheme:light;
 }
-@media (prefers-color-scheme:dark){:root{
+:root[data-theme="dim"]{
+  --bg:#C8D2CE;--surface:#DCE3E0;--sunk:#BAC6C1;--sunk2:#D1DAD6;--line:#C4CEC9;--line2:#A9B7B2;
+  --fg:#101C1A;--fg2:#2A3935;--muted:#3A4844;--faint:#45544F;
+  --accent:#0A5549;--accent-ink:#094C42;--on-accent:#FFFFFF;--accent-soft:#C2D8D1;
+  --live:#9A3719;--low:#8E3316;--ok:#26705F;--amber:#D08A2A;
+  --warn-soft:#E5D8C3;--warn-ink:#5E3108;--warn-line:#D3C2A6;--bad-soft:#E6CFC6;--bad-ink:#6A240D;
+  --ink:#101C1A;--on-ink:#FFFFFF;--done:#2A3935;
+  --q1:#0A5549;--q2:#26705F;--q3:#7FB5A8;--q4:#D08A2A;--q5:#9A3719;
+  --q1t:#0A554933;--q2t:#26705F33;--q3t:#7FB5A855;--q4t:#D08A2A40;--q5t:#9A371933;
+  --scrim:rgba(16,28,26,.45);color-scheme:light}
+:root[data-theme="night"]{
   --bg:#0E1513;--surface:#18211F;--sunk:#222D2A;--sunk2:#1C2624;--line:#26322F;--line2:#33433F;
   --fg:#E8EFED;--fg2:#C3D0CD;--muted:#9DB0AC;--faint:#8A9C98;
   --accent:#6CC9B3;--accent-ink:#8FDCC8;--on-accent:#06211C;--accent-soft:#14302A;
@@ -30,7 +68,7 @@
   --ink:#E8EFED;--on-ink:#0E1513;--done:#C3D0CD;
   --q1:#6CC9B3;--q2:#3E9C88;--q3:#2C6A5F;--q4:#C9853F;--q5:#E9772A;
   --q1t:#6CC9B333;--q2t:#3E9C8833;--q3t:#2C6A5F66;--q4t:#C9853F40;--q5t:#E9772A33;
-  --scrim:rgba(0,0,0,.6);color-scheme:dark}}
+  --scrim:rgba(0,0,0,.6);color-scheme:dark}
 *{box-sizing:border-box}
 html,body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:15px;line-height:1.45;-webkit-text-size-adjust:100%}
 button,input,textarea,select{font-family:inherit;color:inherit}
@@ -61,6 +99,7 @@ h1 .cdot{width:12px;height:12px}
 .btn{white-space:nowrap;display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:44px;padding:0 14px;border:0;border-radius:12px;background:var(--surface);font-weight:600;font-size:14px;text-decoration:none;color:var(--fg)}
 .btn.sunk{background:var(--sunk)}
 .btn.primary{background:var(--accent);color:var(--on-accent)}
+.btn.themeb{min-height:40px;padding:0 12px;font-size:13px}
 .btn.inkb{background:var(--ink);color:var(--on-ink)}
 .btn.block{width:100%;height:52px;font-size:16px;font-weight:700;border-radius:14px}
 .btn:disabled{opacity:.5;cursor:default}

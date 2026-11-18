@@ -13,6 +13,14 @@ folder" and refuses every edit; it never writes to the container's own disk in i
 | `bell_notify` | `[]` | notify services (e.g. `mobile_app_my_phone`) for a heads-up before each class |
 | `bell_minutes` | `2` | how many minutes before |
 
+## Theme
+
+The header's theme button cycles **Auto → Light → Dim → Night**; the choice is kept per device.
+Auto follows the device: a device in light mode gets Light; a device in dark mode gets **Dim** (the
+light theme one step down) while the sun is up and **Night** after sunset. Sunset comes from
+Home Assistant's `sun.sun`; if that can't be read, a dark device gets Night. A class `color` pair
+uses its dark half only in Night.
+
 ## The folder
 
 ```

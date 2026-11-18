@@ -18,7 +18,7 @@ const mins = h => { const m = String(h || "").match(/^(\d{1,2}):(\d{2})$/); retu
 const clock = m => (Math.floor(m / 60) % 12 || 12) + ":" + String(m % 60).padStart(2, "0");
 const nowMin = () => { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); };
 const isoOf = (d = new Date()) => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
-const dark = () => window.matchMedia("(prefers-color-scheme: dark)").matches;
+const dark = () => document.documentElement.dataset.theme === "night";
 const ccol = c => (Array.isArray(c && c.color) ? c.color[dark() ? 1 : 0] : (c && c.color)) || "var(--accent)";
 
 const I = {
@@ -34,6 +34,7 @@ const I = {
   open: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3h7v7"/><path d="M10 14 21 3"/><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/></svg>',
   folder: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
   cam: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>',
+  theme: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></svg>',
   eye: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
   eyeoff: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3 3.9M6.3 6.3C3.6 8 2 12 2 12s3.5 7 10 7a10 10 0 0 0 5.7-1.7"/></svg>'
 };
@@ -369,8 +370,20 @@ function head(o) {
       <nav class="seg dnav" aria-label="Sections">${[["today", "Today"], ["week", "Week"], ["grades", "Grades"], ["students", "Students"]].map(([v, t]) =>
         `<button data-act="go" data-v="${v}" aria-pressed="${tabOf(S.view) === v}">${t}</button>`).join("")}</nav>
       ${desk() && nOpen ? `<button class="btn" data-act="go" data-v="review"><span class="dia"></span>From Claude · ${nOpen}</button>` : ""}
-      ${o.tools || ""}${savePill()}
+      ${o.tools || ""}${themeBtn()}${savePill()}
     </div></header>`;
+}
+const THEMES = ["auto", "light", "dim", "night"], THEME_NAME = { auto: "Auto", light: "Light", dim: "Dim", night: "Night" };
+function themeBtn() {
+  const m = window.btbTheme ? btbTheme.mode() : "auto", now = document.documentElement.dataset.theme;
+  const tip = m === "auto" ? `Theme: auto, ${THEME_NAME[now] || ""} now. Tap to change` : `Theme: ${THEME_NAME[m]}. Tap to change`;
+  return `<button class="btn themeb noprint" data-act="theme" aria-label="${tip}" title="${tip}">${I.theme}${THEME_NAME[m] || "Auto"}</button>`;
+}
+// Re-pick the theme; course colours depend on it, so a change re-renders.
+function retheme() { if (window.btbTheme && btbTheme.apply() && S.d) render(); }
+async function fetchSun() {
+  try { const j = await api("GET", "api/sun"); if (j && j.state) LS.set("btb.sun", JSON.stringify(j)); } catch {}
+  retheme();
 }
 const tabOf = v => ({ student: "students", sheet: "grades", review: "grades" }[v] || v);
 function renderTabs() {
@@ -894,6 +907,7 @@ document.addEventListener("click", e => {
   switch (a) {
     case "go": go(v, v === "students" || v === "grades" ? { sid: null, cid: null } : {}); break;
     case "reload": load(); break;
+    case "theme": LS.set("btb.theme", THEMES[(THEMES.indexOf(btbTheme.mode()) + 1) % THEMES.length]); btbTheme.apply(); render(); break;
     case "day": S.day = v; S.cls = defaultCls(v); render(); break;
     case "cls": S.cls = v; render(); break;
     case "openday": go("today", { day: t.dataset.day, cls: t.dataset.cls }); break;
@@ -1018,6 +1032,7 @@ async function poll() {
   } catch {}
 }
 function tick() {
+  retheme();                                   // sunset passes without a new sun reading
   if (!S.d || !S.d.ok) return;
   const day = todayKey(), live = day ? (liveInfo(day).live || {}).k || null : null;
   if (S.lastLive !== undefined && live && live !== S.lastLive && S.gradesOpen) { S.gradesOpen = false; LS.set("btb.grades", "0"); }  // a new class: grades go away
@@ -1026,11 +1041,13 @@ function tick() {
 }
 setInterval(poll, 4000); setInterval(tick, 20000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });
-window.matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", () => render());
+window.btbTheme?.mq.addEventListener?.("change", retheme);
+setInterval(fetchSun, 600e3);
 window.matchMedia("(min-width: 900px)").addEventListener?.("change", () => render());
 
 (function start() {
   try { const [v, course, id] = decodeURIComponent(location.hash.slice(1)).split("/");
     if (v) S.view = v; if (course) S.course = course; if (v === "student") S.sid = id; if (v === "sheet") S.cid = id; } catch {}
+  fetchSun();
   load().then(() => { if (S.q.length) flush(); tick(); });
 })();

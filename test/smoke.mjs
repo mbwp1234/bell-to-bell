@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import vm from "node:vm";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 let pass = 0, fail = 0;
@@ -47,6 +48,9 @@ await up(PORT);
 try {
   const page = await fetch(B + "/"); ok(page.status === 200 && (await page.text()).includes("app.js"), "page served");
   const js = await fetch(B + "/app.js"); ok(js.status === 200 && js.headers.get("content-type").includes("javascript"), "app.js served");
+
+  const sunR = await j("GET", "/api/sun");
+  ok(sunR.status === 200 && JSON.stringify(sunR.body) === "{}", "no HA: the sun reading is empty, not a guessed day");
 
   let st = await j("GET", "/api/state");
   ok(st.body.ok === true, "state ok");
@@ -157,6 +161,40 @@ try {
   ok(/rest = f\.c\.students\.filter\(st => !mark\(cid, st\.id\)\)/.test(src), "'the rest' only touches students with no mark yet");
   ok(/showNames \? t\.out\.map/.test(src), "names of who owes homework only show when grades may");
   ok(fs.readFileSync(path.join(ROOT, "bell_to_bell/server.mjs"), "utf8").includes("await homeworkLine(x.c.course"), "bell heads-up carries the homework line");
+}
+
+// themes: the head script's picker, run for real, and every theme's small text passes 4.5:1
+{
+  const html = fs.readFileSync(path.join(ROOT, "bell_to_bell/www/index.html"), "utf8");
+  const script = html.match(/<script>\n(\/\* Theme[\s\S]*?)<\/script>/);
+  ok(!!script, "theme picker sits inline in the head");
+  ok(html.indexOf("btbTheme") < html.indexOf("<style>"), "theme is picked before the stylesheet paints");
+  ok(!html.includes("@media (prefers-color-scheme"), "no media-query theme left to fight the picker");
+  const H = 3600e3, now = Date.now();
+  const pick = (dark, store) => {
+    const root = { dataset: {} }, ctx = { document: { documentElement: root }, Date, JSON,
+      matchMedia: () => ({ matches: dark }), localStorage: { getItem: k => (k in store ? store[k] : null) }, window: {} };
+    vm.runInNewContext(script[1], ctx); return root.dataset.theme;
+  };
+  const sunAt = (state, rising, setting) => ({ "btb.sun": JSON.stringify({ state, rising, setting }) });
+  ok(pick(false, sunAt("below_horizon", now + H, now + 9 * H)) === "light", "device light is light, even at night");
+  ok(pick(true, sunAt("above_horizon", now + 9 * H, now + H)) === "dim", "device dark with the sun up is dim");
+  ok(pick(true, sunAt("below_horizon", now + H, now + 9 * H)) === "night", "device dark after sunset is night");
+  ok(pick(true, sunAt("above_horizon", now + 9 * H, now - 60e3)) === "night", "a stale 'up' reading past its sunset counts as night");
+  ok(pick(true, sunAt("below_horizon", now - 60e3, now + 9 * H)) === "dim", "a stale 'down' reading past its sunrise counts as day");
+  ok(pick(true, {}) === "night", "no sun reading: a dark device stays night, as before");
+  ok(pick(true, { "btb.sun": "unknown" }) === "night", "a garbage sun reading is no reading");
+  ok(pick(false, { "btb.theme": "night" }) === "night" && pick(true, { "btb.theme": "light", ...sunAt("below_horizon", now + H, now + 9 * H) }) === "light", "a manual theme wins over device and sun");
+  const blocks = { light: html.match(/:root\{([^}]*)\}/)[1], dim: html.match(/:root\[data-theme="dim"\]\{([^}]*)\}/)[1], night: html.match(/:root\[data-theme="night"\]\{([^}]*)\}/)[1] };
+  const tok = (b, n) => (b.match(new RegExp("--" + n + ":(#[0-9A-Fa-f]{6})")) || [])[1];
+  const lum = h => { const c = [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16) / 255).map(v => v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4); return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; };
+  const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+  for (const [name, b] of Object.entries(blocks)) for (const fg of ["fg2", "muted", "faint", "live", "accent-ink"]) for (const bg of ["bg", "surface"])
+    ok(ratio(tok(b, fg), tok(b, bg)) >= 4.5, `${name}: --${fg} on --${bg} is ${ratio(tok(b, fg), tok(b, bg)).toFixed(2)}:1`);
+  const src = fs.readFileSync(path.join(ROOT, "bell_to_bell/www/app.js"), "utf8");
+  ok(src.includes('case "theme":') && src.includes("${themeBtn()}"), "theme button wired into the header");
+  ok(src.includes('dataset.theme === "night"'), "course colours follow the picked theme, not the device");
+  ok(/function tick\(\) \{\n  retheme\(\);/.test(src) && src.includes("setInterval(fetchSun"), "the theme flips at sunset without a reload");
 }
 
 // the privacy gate: a planted term is refused, a missing denylist refuses everything
