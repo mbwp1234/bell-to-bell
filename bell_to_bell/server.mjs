@@ -287,6 +287,37 @@ async function addHomework(b, by) {
   await log({ by, did: "assigned", what: `${b.course}: ${title}, due ${b.due}`, n: 1 });
   return col;
 }
+// Change a homework after it's set: its title, the day it's handed out, the day it's due. Removing
+// one is only allowed while nobody has been checked in on it, so no mark is ever orphaned.
+async function editHomework(b, by) {
+  if (!ID.test(b.course || "") || !ID.test(b.col || "")) throw bad("bad_hw");
+  const out = await serial(async () => {
+    const file = path.join(COURSES, b.course + ".json");
+    const c = await readJSON(file);
+    if (!c || !Array.isArray(c.columns)) throw Object.assign(new Error("no_such_course"), { code: 404 });
+    const i = c.columns.findIndex(x => x.id === b.col);
+    if (i < 0) throw Object.assign(new Error("no_such_column"), { code: 404 });
+    const col = c.columns[i];
+    if (col.kind !== "HW" && col.kind !== "XP") throw bad("not_homework");
+    if (b.del) {
+      const m = await readJSON(path.join(MARKS, b.col + ".json")).catch(() => null);
+      if (m && m.students && Object.keys(m.students).length) throw Object.assign(new Error("has_marks"), { code: 409 });
+      c.columns.splice(i, 1);
+      await writeJSON(file, c);
+      return { removed: true, title: col.title };
+    }
+    const next = { ...col };
+    if ("title" in b) { const t = (str(b.title, 120) || "").trim(); if (!t) throw bad("bad_title"); next.title = t; }
+    if ("assigned" in b) { if (!ISO.test(b.assigned || "")) throw bad("bad_date"); next.assigned = b.assigned; }
+    if ("due" in b) { if (!ISO.test(b.due || "")) throw bad("bad_date"); next.due = b.due; }
+    if (next.assigned && next.due && next.due < next.assigned) throw bad("due_before_assigned");
+    c.columns[i] = next;
+    await writeJSON(file, c);
+    return { col: next };
+  });
+  await log({ by, did: out.removed ? "removed" : "edited", what: `${b.course}: ${out.removed ? out.title : out.col.title}${out.col ? ", due " + out.col.due : ""}`, n: 1 });
+  return out;
+}
 // A test the teacher adds from the gradebook, so a stack of tests can be scored in the app.
 // `outOf` is the whole test: a test grade is points over the full test, not over what was tried.
 async function addTest(b, by) {
@@ -514,6 +545,7 @@ async function handle(req, res) {
   if (req.method === "POST" && p === "/api/marks") { const b = await body(req); return send(res, 200, { ok: true, results: await markOps(b.ops, by) }); }
   if (req.method === "POST" && p === "/api/column") return send(res, 200, { ok: true, doc: await columnPatch(await body(req)) });
   if (req.method === "POST" && p === "/api/hw") return send(res, 200, { ok: true, col: await addHomework(await body(req), by) });
+  if (req.method === "POST" && p === "/api/hwedit") return send(res, 200, { ok: true, ...(await editHomework(await body(req), by)) });
   if (req.method === "POST" && p === "/api/test") return send(res, 200, { ok: true, col: await addTest(await body(req), by) });
   if (req.method === "POST" && p === "/api/snote") return send(res, 200, { ok: true, doc: await studentNote(await body(req), by) });
   if (req.method === "POST" && p === "/api/classnote") return send(res, 200, { ok: true, doc: await classNote(await body(req), by) });
@@ -530,6 +562,6 @@ setInterval(() => tickClock().catch(() => {}), 30e3); setTimeout(() => tickClock
 http.createServer((req, res) => {
   handle(req, res).catch(e => {
     console.error(new Date().toISOString(), req.method, req.url.split("?")[0], e.message);
-    if (!res.headersSent) send(res, [400, 404, 413].includes(e.code) ? e.code : 500, { error: e.message });
+    if (!res.headersSent) send(res, [400, 404, 409, 413].includes(e.code) ? e.code : 500, { error: e.message });
   });
 }).listen(PORT, () => console.log(`Bell to Bell on :${PORT}; data folder ${mounted() ? "found" : "NOT FOUND - is the network storage mounted?"}; sensor ${HA_API && NOW_SENSOR ? "on" : "off"}; bell heads-up ${BELL_NOTIFY.length ? "on" : "off"}`));

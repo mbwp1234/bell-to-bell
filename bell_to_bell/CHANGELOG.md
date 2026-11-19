@@ -1,3 +1,11 @@
+## 0.6.1
+- The week's note moves out of the eyebrow onto its own line, so the class name sits right under a short label.
+- The homework and print boxes in the side column match the worksheets card, and the column is a touch wider.
+- The highlighted worksheet is the one today's print list names, not just the first file.
+- **Edit homework**: click a homework's title on Today (or Edit on its page) to change what it
+  is, the day it's handed out and the day it's due (`POST api/hwedit`). One nobody has been
+  checked in on can be removed; one with check-ins can't, so no mark is orphaned.
+
 ## 0.6.0
 - **Sidebar says Bell to Bell** instead of School.
 - **Today, laptop first.** The plan reads in a wide column in larger type. A bar across the top

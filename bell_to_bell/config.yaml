@@ -1,5 +1,5 @@
 name: Bell to Bell
-version: "0.6.0"
+version: "0.6.1"
 slug: bell_to_bell
 description: A classroom day planner and gradebook in one, kept as JSON files in a folder you choose.
 url: https://github.com/mbwp1234/bell-to-bell

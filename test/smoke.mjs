@@ -115,6 +115,18 @@ try {
   r = await j("POST", "/api/hw", { course: "alg", title: " ", assigned: days[0].iso, due: days[1].iso }); ok(r.status === 400, "homework with no title is refused");
   r = await j("POST", "/api/hw", { course: "nope", title: "x", assigned: days[0].iso, due: days[1].iso }); ok(r.status === 404, "homework for a missing course is refused");
   ok(fs.readFileSync(path.join(D, "activity.jsonl"), "utf8").includes('"did":"assigned"'), "setting homework is logged");
+  // homework can be edited after it's set, and removed only while nobody is checked in
+  const hwCols = () => JSON.parse(fs.readFileSync(path.join(D, "Gradebook/courses/alg.json"), "utf8")).columns.filter(c => c.kind === "HW");
+  const marked = hwCols().find(c => /^hw-alg-/.test(c.id));
+  r = await j("POST", "/api/hwedit", { course: "alg", col: marked.id, due: days[4].iso, title: "Workbook pg 9-10" });
+  ok(r.status === 200 && r.body.col.due === days[4].iso && r.body.col.title === "Workbook pg 9-10" && r.body.col.assigned === days[0].iso, "homework due date and title changed, handed-out day kept");
+  ok(hwCols().find(c => c.id === marked.id).due === days[4].iso, "the change is in the course file");
+  r = await j("POST", "/api/hwedit", { course: "alg", col: marked.id, due: "2000-01-01" }); ok(r.status === 400, "a due date before it was handed out is refused");
+  r = await j("POST", "/api/hwedit", { course: "alg", col: marked.id, del: true }); ok(r.status === 409 && hwCols().some(c => c.id === marked.id), "homework with check-ins can't be removed");
+  r = await j("POST", "/api/hwedit", { course: "alg", col: "c1", due: days[4].iso }); ok(r.status === 400, "only homework is edited this way");
+  r = await j("POST", "/api/hw", { course: "alg", title: "Spare", assigned: days[0].iso, due: days[1].iso });
+  const spare = r.body.col.id;
+  r = await j("POST", "/api/hwedit", { course: "alg", col: spare, del: true }); ok(r.status === 200 && r.body.removed === true && !hwCols().some(c => c.id === spare), "unchecked homework can be removed");
 
   // tests added in the app carry the whole test's points
   r = await j("POST", "/api/test", { course: "alg", title: "Unit 2 test", due: days[2].iso, outOf: 100, week: 7 });
@@ -171,7 +183,7 @@ try {
 {
   const src = fs.readFileSync(path.join(ROOT, "bell_to_bell/www/app.js"), "utf8");
   ok(/const prints = Array\.isArray\(d\.print\)/.test(src), "print list read from the plan day");
-  ok(src.includes("${filesBox(it.k, hand)}${print}${hwBox("), "print list placed in the side column, under the worksheet");
+  ok(src.includes("${filesBox(it.k, hand, prints)}${print}${hwBox("), "print list placed in the side column, under the worksheet");
   ok(fs.readFileSync(path.join(ROOT, "bell_to_bell/www/index.html"), "utf8").includes(".printbox{"), "print list styled");
 }
 
@@ -220,7 +232,7 @@ try {
 // the new Today and Grades wiring
 {
   const src = fs.readFileSync(path.join(ROOT, "bell_to_bell/www/app.js"), "utf8");
-  for (const t of ['case "jump":', 'case "qscore":', 'case "qstat":', 'case "newcol":', 'case "colsave":', 'case "snote":', 'case "snsave":', 'case "sndel":', 'case "copynotes":', 'case "akind":', 'case "asgmiss":', 't.dataset.cnote', 's.t === "qscore"', 's.t === "newcol"', 's.t === "snote"'])
+  for (const t of ['case "hwedit":', 'case "hwesave":', 'case "hwedel":', 's.t === "hwedit"', 'case "jump":', 'case "qscore":', 'case "qstat":', 'case "newcol":', 'case "colsave":', 'case "snote":', 'case "snsave":', 'case "sndel":', 'case "copynotes":', 'case "akind":', 'case "asgmiss":', 't.dataset.cnote', 's.t === "qscore"', 's.t === "newcol"', 's.t === "snote"'])
     ok(src.includes(t), "wiring: " + t);
   ok(src.includes("${noteBox(it)}</section>") && src.includes("h += glance(c);") && src.includes('return h + asgGrid(c);') && src.includes("h += notesSection(c, st);"), "notes box, glance, grid and student notes are all called, not just defined");
   ok(src.includes("${worksheetDock(it.k, hand)}"), "phone worksheet button is placed");

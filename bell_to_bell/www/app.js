@@ -316,11 +316,11 @@ function hwBox(k, day, showNames) {
   const h = hwFor(k, day); if (!h) return "";
   const ro = S.save === "ro" ? " disabled" : "";
   const rows = [];
-  for (const { col, t } of h.collect) rows.push(`<div class="hwr"><div><span class="hwk">Collect</span> ${esc(col.title)}<div class="small muted">${t.marked ? `${t.marked} of ${h.c.students.length} checked in` : "Nobody checked in yet"}${t.notin ? ` · ${t.notin} not in` : ""}</div></div><button class="btn sunk" data-act="hwin" data-cid="${col.id}"${ro}>${I.check}Check in</button></div>`);
-  for (const col of h.assign) rows.push(`<div class="hwr"><div><span class="hwk">Hand out</span> ${esc(col.title)}<div class="small muted">${esc(dueTxt(col.due, h.iso))}</div></div><button class="link small" data-act="sheetcol" data-cid="${col.id}">Open</button></div>`);
+  for (const { col, t } of h.collect) rows.push(`<div class="hwr"><div><span class="hwk">Collect</span> <button class="link hwtl" data-act="hwedit" data-cid="${col.id}" title="Edit this homework">${esc(col.title)}</button><div class="small muted">${t.marked ? `${t.marked} of ${h.c.students.length} checked in` : "Nobody checked in yet"}${t.notin ? ` · ${t.notin} not in` : ""}</div></div><button class="btn sunk" data-act="hwin" data-cid="${col.id}"${ro}>${I.check}Check in</button></div>`);
+  for (const col of h.assign) rows.push(`<div class="hwr"><div><span class="hwk">Hand out</span> <button class="link hwtl" data-act="hwedit" data-cid="${col.id}" title="Edit this homework">${esc(col.title)}</button><div class="small muted">${esc(dueTxt(col.due, h.iso))}</div></div><button class="btn sunk" data-act="hwedit" data-cid="${col.id}"${ro}>Edit</button></div>`);
   for (const { col, t } of h.owed) {
     const who = !t.marked ? "Never checked in" : showNames ? t.out.map(s => esc(first(s.name))).join(", ") + " not in" : `${t.notin} not in`;
-    rows.push(`<div class="hwr owed"><div><span class="hwk">Still out</span> ${esc(col.title)}<div class="small">${who} · was ${esc(dueTxt(col.due, h.iso))}</div></div><button class="btn sunk" data-act="hwin" data-cid="${col.id}"${ro}>Check in</button></div>`);
+    rows.push(`<div class="hwr owed"><div><span class="hwk">Still out</span> <button class="link hwtl" data-act="hwedit" data-cid="${col.id}" title="Edit this homework">${esc(col.title)}</button><div class="small">${who} · was ${esc(dueTxt(col.due, h.iso))}</div></div><button class="btn sunk" data-act="hwin" data-cid="${col.id}"${ro}>Check in</button></div>`);
   }
   return `<div class="hwbox noprint"><div class="row" style="justify-content:space-between"><div class="n">Homework</div><button class="link small" data-act="hwnew" data-cls="${k}"${ro}>+ Set homework</button></div>
     ${rows.join("") || '<div class="small muted" style="margin-top:4px">Nothing to collect or hand out.</div>'}</div>`;
@@ -531,20 +531,25 @@ function viewToday() {
     <div class="dayhead"><h2>${rich(d.focus || it.c.name)}</h2>${planUnit(it.k) ? `<div class="unit">${esc(planUnit(it.k))}</div>` : ""}</div>
     ${d.sub ? `<p class="sub">${rich(d.sub)}</p>` : ""}
     ${tbar}<div class="steps">${steps}</div>${watch}${gap}${noteBox(it)}</section>`;
-  const side = `<aside class="side">${filesBox(it.k, hand)}${print}${hwBox(it.k, S.day, showNames)}${exitBtn}
+  const side = `<aside class="side">${filesBox(it.k, hand, prints)}${print}${hwBox(it.k, S.day, showNames)}${exitBtn}
     ${gradesHere && S.gradesOpen ? `<section class="card gpane">${miniGrid(course, li.live && li.live.k === it.k ? needs(courseOf(course)).slice(0, 6).map(n => n.sid) : [])}
     <p class="small muted" style="margin:10px 0 0">Grades hide themselves when the next class starts, so they never open on the projector.</p></section>` : ""}</aside>`;
-  return head({ eyebrow: `${esc(dayMeta.label)}${isToday(S.day) ? " · today" : ""} · ${esc(p.label || "Week " + S.d.week)}${p.note ? " · " + esc(p.note) : ""}`,
-                title: esc(it.c.name), dot: ccol(it.c), lede, tools }) + daysBar + strip +
+  // The week's note is a sentence, not a label: it gets its own line instead of riding in the eyebrow.
+  return head({ eyebrow: `${esc(dayMeta.label)}${isToday(S.day) ? " · today" : ""} · ${esc(p.label || "Week " + S.d.week)}`,
+                title: esc(it.c.name), dot: ccol(it.c), lede, tools }) + (p.note ? `<p class="wnote">${esc(p.note)}.</p>` : "") + daysBar + strip +
     `<div class="todaygrid${gradesHere && S.gradesOpen ? " wide" : ""}" style="margin-top:12px">${main}${side}</div>${worksheetDock(it.k, hand)}`;
 }
 // The worksheet, always in the same place: top of the side column on a laptop, a button over
 // the tab bar on a phone. One file opens straight away; the folder and its other files are a tap on.
-function filesBox(k, hand) {
+function filesBox(k, hand, prints = []) {
   if (!hand || !hand.copies.length) return `<section class="card files"><div class="n">Worksheet</div><div class="small muted">No handouts folder for this class.</div></section>`;
   const open = f => `api/file?p=${encodeURIComponent(hand.dir + "/" + f)}`;
+  // The highlighted one is what today's print list names; with no print list, the first file.
+  const said = prints.join(" ").replace(/<[^>]+>/g, "").toLowerCase(), base = f => f.replace(/\.[a-z0-9]+$/i, "").toLowerCase();
+  const named = hand.files.filter(f => said && said.includes(base(f)));
+  const lit = f => named.length ? named.includes(f) : f === hand.files[0];
   return `<section class="card files noprint"><div class="row" style="justify-content:space-between"><div class="n">Worksheet${hand.files.length > 1 ? "s · " + hand.files.length : ""}</div><button class="link small" data-act="handouts" data-cls="${k}">${I.folder} Folder</button></div>
-    ${hand.files.length ? hand.files.map((f, i) => `<a class="btn ${i ? "sunk" : "primary"} fileb" href="${open(f)}" target="_blank" rel="noopener">${I.open}<span>${esc(f.replace(/\.pdf$/i, ""))}</span></a>`).join("")
+    ${hand.files.length ? hand.files.map(f => `<a class="btn ${lit(f) ? "primary" : "sunk"} fileb" href="${open(f)}" target="_blank" rel="noopener">${I.open}<span>${esc(f.replace(/\.pdf$/i, ""))}</span></a>`).join("")
       : `<div class="small muted">${hand.missing ? "This week's folder isn't there yet." : "Nothing in the folder yet."}</div>`}</section>`;
 }
 function worksheetDock(k, hand) {
@@ -899,7 +904,7 @@ function viewSheet() {
   const same = c.columns.filter(x => x.week === col.week);
   const rows = c.students.map(s => { const m = mark(col.id, s.id); return { s, m, p: isScored(m) ? (col.kind === "TEST" ? testPct(m, col) : pct(m, col)) : null }; });
   const sc = rows.filter(r => r.p != null), avg = sc.length ? sc.reduce((a, r) => a + r.p, 0) / sc.length : null;
-  const tools = `${col.kind !== "XT" ? `<button class="btn primary noprint" data-act="qscore" data-cid="${col.id}">${I.check}Score the class</button>` : ""}<button class="btn noprint" data-act="excuse" data-cid="${col.id}">${xd ? "Count this assignment again" : "Excuse for the whole class"}</button>`;
+  const tools = `${comp ? `<button class="btn noprint" data-act="hwedit" data-cid="${col.id}">Edit</button>` : ""}${col.kind !== "XT" ? `<button class="btn primary noprint" data-act="qscore" data-cid="${col.id}">${I.check}Score the class</button>` : ""}<button class="btn noprint" data-act="excuse" data-cid="${col.id}">${xd ? "Count this assignment again" : "Excuse for the whole class"}</button>`;
   let h = head({ back: ["grades", "Grades"], eyebrow: `${esc(c.name)} · Week ${col.week ?? ""}`, title: esc(col.title), tools,
     lede: `${KIND[col.kind] || col.kind}${col.due ? " · due " + esc(col.due) : ""}${!comp && col.items ? ` · ${col.items.length} problems` : ""}${!comp ? ` · ${sc.length} of ${c.students.length} scored` : ""}${col.kind === "TEST" ? ` · out of ${esc(col.outOf ?? "?")}, counts toward the grade` : col.kind === "HW" ? " · counts toward the grade" : " · shown, doesn't count"}` });
   if (same.length > 1) h += `<div class="strip noprint" style="margin-bottom:12px">${same.map(x => `<button class="chip" data-act="sheetcol" data-cid="${x.id}" aria-pressed="${x.id === col.id}">${x.kind !== "CW" ? (KIND[x.kind] || x.kind) + " · " : ""}${esc(x.title)}</button>`).join("")}</div>`;
@@ -1051,6 +1056,16 @@ function renderSheet() {
         : `<label class="k" for="nca">Handed out</label><input type="date" id="nca" value="${iso}"><label class="k" for="ncd">Due</label><input type="date" id="ncd" value="${cls ? nextMeet(cls[0], iso) : isoAdd(iso, 1)}">`}
         <p class="small muted" style="margin:0">${test ? "Tests count toward the grade. Next, you score it here, student by student." : "Homework counts on completion, plus accuracy when you give it a score."}</p></div>`,
       `<button class="btn primary block" data-act="colsave" data-v="${test ? "TEST" : "HW"}">Add and score it</button>`);
+  } else if (s.t === "hwedit") {
+    const f = findCol(s.cid); if (!f) { S.sheet = null; host.innerHTML = ""; return; }
+    const { c, col } = f, marked = c.students.filter(st => mark(col.id, st.id)).length, ro = S.save === "ro" ? " disabled" : "";
+    html = sheetFrame(`${esc(KIND[col.kind] || "Homework")} · ${esc(c.name)}`, "Edit homework",
+      `<div class="stack"><label class="k" for="hwe-t">What it is</label><input type="text" id="hwe-t" maxlength="120" value="${esc(col.title)}"${ro}>
+        <label class="k" for="hwe-a">Handed out</label><input type="date" id="hwe-a" value="${esc(col.assigned || "")}"${ro}>
+        <label class="k" for="hwe-d">Due</label><input type="date" id="hwe-d" value="${esc(col.due || "")}"${ro}>
+        <p class="small muted" style="margin:0">Today shows <b>Hand out</b> on the first date and <b>Collect</b> on the second. ${marked ? `${marked} of ${c.students.length} already checked in; their marks stay as they are.` : "Nobody is checked in yet."}</p></div>`,
+      `<button class="btn primary block" data-act="hwesave" data-cid="${col.id}"${ro}>Save</button>
+       ${marked ? `<p class="small muted" style="margin:0;text-align:center">It can't be removed once anyone is checked in. Excuse it for the class instead, from its page.</p>` : `<button class="btn sunk block" data-act="hwedel" data-cid="${col.id}"${ro}>Remove this homework</button>`}`);
   } else if (s.t === "snote") {
     const f = findStudent(s.sid); if (!f) { S.sheet = null; host.innerHTML = ""; return; }
     const recent = notesFor(f.c, s.sid).slice(0, 3);
@@ -1199,6 +1214,15 @@ document.addEventListener("click", e => {
       else { const assigned = val("nca"); if (!/^\d{4}-\d{2}-\d{2}$/.test(assigned) || due < assigned) { toast("Due has to be on or after the day it's handed out"); break; } post("api/hw", { course: S.course, title, due, assigned, week }, done); }
       break; }
     case "snote": openSheet({ t: "snote", sid }); break;
+    case "hwedit": openSheet({ t: "hwedit", cid }); break;
+    case "hwesave": { const f = findCol(cid); if (!f) break;
+      const val = id => ((document.getElementById(id) || {}).value || "").trim(), title = val("hwe-t"), assigned = val("hwe-a"), due = val("hwe-d");
+      if (!title) { toast("Say what the homework is"); break; }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(due) || (assigned && !/^\d{4}-\d{2}-\d{2}$/.test(assigned))) { toast("Pick the dates"); break; }
+      if (assigned && due < assigned) { toast("Due has to be on or after the day it's handed out"); break; }
+      post("api/hwedit", { course: f.cid, col: cid, title, due, ...(assigned ? { assigned } : {}) }, j => { Object.assign(f.col, j.col); closeSheet(); toast(`Saved · ${dueTxt(j.col.due, isoOf())}`); }); break; }
+    case "hwedel": { const f = findCol(cid); if (!f) break;
+      post("api/hwedit", { course: f.cid, col: cid, del: true }, () => { f.c.columns = f.c.columns.filter(x => x.id !== cid); closeSheet(); if (S.view === "sheet" && S.cid === cid) go("grades"); toast("Homework removed"); }); break; }
     case "snsave": case "snadd": { const ta = document.getElementById(a === "snsave" ? "snq" : "sn-" + sid), text = ((ta || {}).value || "").trim();
       const col = a === "snadd" ? ((document.getElementById("snc-" + sid) || {}).value || null) : null;
       if (!text) { toast("Write the note first"); break; }

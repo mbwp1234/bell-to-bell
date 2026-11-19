@@ -142,10 +142,13 @@ h1 .cdot{width:12px;height:12px}
    sit in the side column, in the same place for every class. On a phone the side comes first. */
 .todaygrid{display:grid;grid-template-columns:minmax(0,1fr);gap:14px;align-items:start}
 .todaygrid .side{order:-1}
-@media (min-width:900px){.todaygrid{grid-template-columns:minmax(0,1fr) 320px;gap:18px}.todaygrid.wide{grid-template-columns:minmax(0,1fr) 460px}.todaygrid .side{order:0;position:sticky;top:12px}}
+@media (min-width:900px){.todaygrid{grid-template-columns:minmax(0,1fr) 340px;gap:18px}.todaygrid.wide{grid-template-columns:minmax(0,1fr) 460px}.todaygrid .side{order:0;position:sticky;top:12px}}
 .railcard{min-width:0}
 .side{display:flex;flex-direction:column;gap:12px;min-width:0}
-.side .printbox,.side .hwbox{margin:0}
+.side .printbox,.side .hwbox{margin:0;border-radius:18px;padding:14px 16px}
+.side .hwbox{background:var(--surface)}
+.side .hwbox .n,.side .printbox .n{margin-bottom:2px}
+.wnote{margin:-4px 0 4px;font-size:14px;color:var(--fg2);max-width:70ch}
 .files{padding:14px 16px}
 .files .n,.cnote .n,.watchbox .n{font-size:12px;font-weight:700;color:var(--fg2);text-transform:uppercase;letter-spacing:.04em}
 .files .row{margin-bottom:8px}
@@ -219,6 +222,7 @@ h1 .cdot{width:12px;height:12px}
 .hwr.owed .small{color:var(--warn-ink)}
 .hwk{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--accent-ink);margin-right:4px}
 .hwr.owed .hwk{color:var(--warn-ink)}
+.hwtl{font-weight:500;color:var(--fg);text-decoration:underline;text-decoration-color:var(--line2);text-underline-offset:3px}
 .hwt{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--accent-ink)}
 input[type=date]{font-size:16px;height:46px;border:0;border-radius:12px;background:var(--sunk2);padding:0 12px;width:100%;color:var(--fg)}
 .gap{border:1.5px dashed var(--line2);border-radius:12px;padding:12px;margin-top:10px;background:var(--sunk2)}

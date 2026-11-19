@@ -53,7 +53,8 @@ per rail step key (`warm`, `board {cap, lines}`, `group`, `exit {q, a}`, …), p
 A homework column (`kind` `HW` or `XP`, in the course file) may carry `assigned` and `due`
 (`YYYY-MM-DD`). On Today, the class's day card says **Hand out** on `assigned` and **Collect** on
 `due`, with a Check in list, and **Still out** for the last two weeks' homework that has students
-not in or was never checked in. **+ Set homework** on the card writes a new one.
+not in or was never checked in. **+ Set homework** on the card writes a new one; clicking a homework's title edits its title and
+dates, or removes it while nobody has been checked in.
 
 A mark: `status` (`scored missing absent excused nopage` / homework `done partial notin`), `pts`,
 `outOf` (2 × problems tried), `inc`, `note`, `r` (one code per item: `2` right, `1` method, `0`
