@@ -116,6 +116,28 @@ try {
   r = await j("POST", "/api/hw", { course: "nope", title: "x", assigned: days[0].iso, due: days[1].iso }); ok(r.status === 404, "homework for a missing course is refused");
   ok(fs.readFileSync(path.join(D, "activity.jsonl"), "utf8").includes('"did":"assigned"'), "setting homework is logged");
 
+  // tests added in the app carry the whole test's points
+  r = await j("POST", "/api/test", { course: "alg", title: "Unit 2 test", due: days[2].iso, outOf: 100, week: 7 });
+  ok(r.status === 200 && r.body.col.kind === "TEST" && r.body.col.outOf === 100 && /^test-alg-/.test(r.body.col.id), "test column created with its out of");
+  r = await j("POST", "/api/test", { course: "alg", title: "No points", due: days[2].iso }); ok(r.status === 400, "a test with no out of is refused");
+  // student notes build up, and one can be taken back
+  r = await j("POST", "/api/snote", { sid: "s1", text: "Quieter this week", col: "c1" });
+  ok(r.status === 200 && r.body.doc.items.length === 1 && r.body.doc.items[0].col === "c1" && !!r.body.doc.items[0].at, "student note kept with its assignment");
+  r = await j("POST", "/api/snote", { sid: "s1", text: "Second note" }); ok(r.body.doc.items.length === 2, "student notes build up");
+  const nid = r.body.doc.items[0].id;
+  r = await j("POST", "/api/snote", { sid: "s1", id: nid, del: true }); ok(r.body.doc.items.length === 1 && r.body.doc.items[0].text === "Second note", "one note removed, the other kept");
+  r = await j("POST", "/api/snote", { sid: "s1", text: "  " }); ok(r.status === 400, "an empty student note is refused");
+  r = await j("POST", "/api/snote", { sid: "../x", text: "x" }); ok(r.status === 400, "a path-like student id is refused");
+  // a class note: one per class per day, replaced on save, removed when emptied
+  r = await j("POST", "/api/classnote", { cls: "alg", date: days[1].iso, week: 7, day: "tue", text: "Got to problem 4" });
+  ok(r.status === 200 && r.body.doc.notes.length === 1, "class note saved");
+  await j("POST", "/api/classnote", { cls: "alg", date: days[0].iso, week: 7, day: "mon", text: "Monday" });
+  r = await j("POST", "/api/classnote", { cls: "alg", date: days[1].iso, week: 7, day: "tue", text: "Got to problem 5" });
+  ok(r.body.doc.notes.length === 2 && r.body.doc.notes[0].date === days[0].iso && r.body.doc.notes[1].text === "Got to problem 5", "class note replaced, notes kept in date order");
+  ok(fs.existsSync(path.join(D, "Notes/alg.json")), "class notes live in Notes/<class>.json");
+  r = await j("POST", "/api/classnote", { cls: "alg", date: days[0].iso, text: "" }); ok(r.body.doc.notes.length === 1, "an emptied class note is removed");
+  st = await j("GET", "/api/state"); ok(st.body.cnotes.alg.notes.length === 1 && st.body.snotes.s1.items.length === 1, "notes come back in the state");
+
   r = await j("POST", "/api/column", { col: "c1", excused: true, sheetNote: "most missed 2b" }); ok(r.body.doc.excused === true && r.body.doc.students.s1.pts === 5, "column patch keeps the marks");
   r = await j("POST", "/api/prep", { week: 7, id: "p1", on: true }); ok(!!r.body.prep["week-7"].p1, "prep tick saved");
   r = await j("POST", "/api/override", { week: 7, cls: "alg", day: "mon", warmup: "g1" }); ok(r.body.overrides["week-7/alg/mon"].warmup === "g1", "warm-up swap saved");
@@ -149,18 +171,60 @@ try {
 {
   const src = fs.readFileSync(path.join(ROOT, "bell_to_bell/www/app.js"), "utf8");
   ok(/const prints = Array\.isArray\(d\.print\)/.test(src), "print list read from the plan day");
-  ok(src.includes("${print}${hwBox("), "print list placed on the day card");
+  ok(src.includes("${filesBox(it.k, hand)}${print}${hwBox("), "print list placed in the side column, under the worksheet");
   ok(fs.readFileSync(path.join(ROOT, "bell_to_bell/www/index.html"), "utf8").includes(".printbox{"), "print list styled");
 }
 
 // homework prompts are wired into Today, the week and the sheets
 {
   const src = fs.readFileSync(path.join(ROOT, "bell_to_bell/www/app.js"), "utf8");
-  ok(src.includes("${print}${hwBox(it.k, S.day, showNames)}${steps}"), "homework box placed on the day card");
+  ok(src.includes("${print}${hwBox(it.k, S.day, showNames)}${exitBtn}"), "homework box placed in the side column");
   for (const t of ['s.t === "hwin"', 's.t === "hwnew"', 'case "hwin":', 'case "hwnew":', 'case "hwset":', 'case "hwrest":', 'case "hwsave":']) ok(src.includes(t), "homework wiring: " + t);
   ok(/rest = f\.c\.students\.filter\(st => !mark\(cid, st\.id\)\)/.test(src), "'the rest' only touches students with no mark yet");
   ok(/showNames \? t\.out\.map/.test(src), "names of who owes homework only show when grades may");
   ok(fs.readFileSync(path.join(ROOT, "bell_to_bell/server.mjs"), "utf8").includes("await homeworkLine(x.c.course"), "bell heads-up carries the homework line");
+}
+
+// the grading block, run on its own: tests 60 / homework 40, homework 70 done / 30 right
+{
+  const src = fs.readFileSync(path.join(ROOT, "bell_to_bell/www/app.js"), "utf8");
+  const blk = src.match(/\/\* grading:start[\s\S]*?\/\* grading:end \*\//);
+  ok(!!blk, "grading block is marked");
+  const run = (cols, marks, grading) => {
+    const ctx = { M: marks, G: grading };
+    vm.runInNewContext(`const school = () => ({ grading: G }); const colX = c => !!c.x; const mark = (cid, sid) => (M[cid] || {})[sid] || null;
+      const isScored = m => !!m && (m.status === "scored" || m.status === "late");\n${blk[0]}\nthis.out = grade({ columns: COLS }, "s");`, Object.assign(ctx, { COLS: cols }));
+    return ctx.out;
+  };
+  const near = (a, b) => a != null && Math.abs(a - b) < 1e-9;
+  const T = { id: "t", kind: "TEST", outOf: 100 }, H1 = { id: "h1", kind: "HW" }, H2 = { id: "h2", kind: "HW" }, W = { id: "w", kind: "CW", outOf: 40 };
+  let g = run([T], { t: { s: { status: "scored", pts: 30, outOf: 40 } } });
+  ok(near(g.tests, 30), "a test counts over the whole test, not over what was tried");
+  g = run([T, H1], { t: { s: { status: "scored", pts: 80 } }, h1: { s: { status: "done" } } });
+  ok(near(g.homework, 100) && near(g.grade, 0.6 * 80 + 0.4 * 100), "tests 60, homework 40");
+  g = run([H1], { h1: { s: { status: "done", pts: 5, outOf: 10 } } });
+  ok(near(g.homework, 70 + 30 * 0.5), "homework: 70 done + 30 right");
+  g = run([H1, H2], { h1: { s: { status: "partial" } }, h2: { s: { status: "notin" } } });
+  ok(near(g.homework, 25), "partial is half, not in is zero, no score means completion alone");
+  g = run([H1], { h1: { s: { status: "absent" } } }); ok(g.homework === null && g.grade === null, "absent homework is left out, never zero");
+  g = run([T, W], { t: { s: { status: "missing" } }, w: { s: { status: "scored", pts: 10, outOf: 40 } } });
+  ok(g.grade === null && g.tests === null, "worksheets never count; a missing test is left out, not zero");
+  g = run([{ ...T, x: true }, H1], { t: { s: { status: "scored", pts: 0 } }, h1: { s: { status: "done" } } }); ok(near(g.grade, 100), "an excused test drops out of the grade");
+  g = run([T, H1], { t: { s: { status: "scored", pts: 50 } }, h1: { s: { status: "done" } } }, { tests: 50, homework: 50, completion: 100, accuracy: 0 });
+  ok(near(g.grade, 75), "weights come from school.json grading");
+  g = run([{ id: "a", kind: "TEST", outOf: 50 }, { id: "b", kind: "TEST", outOf: 100 }], { a: { s: { status: "scored", pts: 50 } }, b: { s: { status: "scored", pts: 50 } } });
+  ok(near(g.tests, 100 * 100 / 150), "tests add up by points, so a longer test weighs more");
+  ok(!/\?\? 0\)/.test(blk[0]), "the grading block never turns a missing reading into a zero");
+}
+
+// the new Today and Grades wiring
+{
+  const src = fs.readFileSync(path.join(ROOT, "bell_to_bell/www/app.js"), "utf8");
+  for (const t of ['case "jump":', 'case "qscore":', 'case "qstat":', 'case "newcol":', 'case "colsave":', 'case "snote":', 'case "snsave":', 'case "sndel":', 'case "copynotes":', 'case "akind":', 'case "asgmiss":', 't.dataset.cnote', 's.t === "qscore"', 's.t === "newcol"', 's.t === "snote"'])
+    ok(src.includes(t), "wiring: " + t);
+  ok(src.includes("${noteBox(it)}</section>") && src.includes("h += glance(c);") && src.includes('return h + asgGrid(c);') && src.includes("h += notesSection(c, st);"), "notes box, glance, grid and student notes are all called, not just defined");
+  ok(src.includes("${worksheetDock(it.k, hand)}"), "phone worksheet button is placed");
+  ok(fs.readFileSync(path.join(ROOT, "bell_to_bell/config.yaml"), "utf8").includes("panel_title: Bell to Bell"), "sidebar says Bell to Bell");
 }
 
 // themes: the head script's picker, run for real, and every theme's small text passes 4.5:1

@@ -1,3 +1,31 @@
+## 0.6.0
+- **Sidebar says Bell to Bell** instead of School.
+- **Today, laptop first.** The plan reads in a wide column in larger type. A bar across the top
+  shows every section at its share of the period, the running one lit and filling; click one to
+  jump to it. The worksheets sit top right for every class (one click opens the PDF to print
+  another copy), with the print list, homework and the exit ticket under them. On a phone those
+  come first and a **Worksheet** button sits above the tab bar.
+- **Notes for Claude** at the bottom of every class: one note per class per day, saved to
+  `Notes/<class>.json`, with the earlier ones folded underneath.
+- **The grade that counts.** Tests and homework only, weighted by `school.json` `grading`
+  (default tests 60 / homework 40). A test is points over the whole test, added up across tests.
+  A homework is 70% completion (done 1, partial ½, not in 0) and 30% accuracy when it has a
+  score; one with no score counts on completion alone. Absent, excused, unsorted and unmarked are
+  left out, never zero; a missing test is left out of the average and counted as missing.
+  Worksheets, sub days, extra practice and exit tickets are still shown and never counted.
+- **Grades overview:** class average (tests and homework), what's missing and who owes most, and
+  the slipping students with their own graphs and a **+ Note** button. The grid's last column is
+  the grade.
+- **Assignments grid:** every student against every assignment, missing work boxed in red,
+  filters by kind and "only who owes something", and an Owes and a Grade column.
+- **Score the class:** a sheet to type a score per student with Enter to move down, missing /
+  absent (or done / partial / not in / away for homework), and a note per student. **+ Test**
+  (`POST api/test`) and **+ Homework** add the assignment and open it. Homework takes an optional
+  accuracy score.
+- **Notes for report cards** on each student's page: notes added there or from the Slipping card
+  (`Gradebook/notes/<student>.json`, `POST api/snote`), merged with every note on their marks,
+  newest first, with Copy all.
+
 ## 0.5.0
 - **Lighter by day.** New light theme (Mist: soft grey-green, off-white cards) replaces the bright
   white one. A device in dark mode now gets **Dim**, Mist one step darker, while the sun is up,

@@ -7,6 +7,8 @@
 //   Gradebook/profiles/<student>.json
 //   Gradebook/inbox/, scans/         scans waiting to be scored / already scored
 //   state/prep.json, overrides.json  prep ticks, warm-up swaps (written by this app only)
+//   Gradebook/notes/<student>.json   notes about one student, kept for report cards
+//   Notes/<class>.json               the teacher's notes on each class day, for Claude
 //   requests.json, activity.jsonl    notes to Claude, change log
 import http from "node:http";
 import fs from "node:fs/promises";
@@ -27,7 +29,7 @@ const INGRESS_IP = "172.30.32.2";
 const P = rel => path.join(DATA_DIR, rel);
 const SCHOOL = P("school.json"), PLANS = P("Plans"), GB = P("Gradebook");
 const COURSES = path.join(GB, "courses"), MARKS = path.join(GB, "marks"), PROFILES = path.join(GB, "profiles");
-const INBOX = path.join(GB, "inbox"), SCANS = path.join(GB, "scans");
+const INBOX = path.join(GB, "inbox"), SCANS = path.join(GB, "scans"), SNOTES = path.join(GB, "notes"), CNOTES = P("Notes");
 const PREP = P("state/prep.json"), OVERRIDES = P("state/overrides.json");
 const REQUESTS = P("requests.json"), ACTIVITY = P("activity.jsonl");
 const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/;
@@ -71,7 +73,7 @@ async function list(dir, ext = ".json") { try { return (await fs.readdir(dir)).f
 async function revision() {
   const parts = [];
   for (const f of [SCHOOL, PREP, OVERRIDES, REQUESTS, ACTIVITY]) parts.push(f + (await tag(f)));
-  for (const d of [PLANS, COURSES, MARKS, PROFILES]) for (const n of await list(d)) parts.push(n + (await tag(path.join(d, n))));
+  for (const d of [PLANS, COURSES, MARKS, PROFILES, SNOTES, CNOTES]) for (const n of await list(d)) parts.push(n + (await tag(path.join(d, n))));
   parts.push("inbox" + (await list(INBOX, "")).length);
   let h = 2166136261;
   for (const ch of parts.join("|")) h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
@@ -148,15 +150,16 @@ async function state(weekParam) {
   const week = weekParam && ws.some(w => w.week === weekParam) ? weekParam : currentWeek(ws);
   const plan = week != null ? await readJSON(path.join(PLANS, `week-${String(week).padStart(2, "0")}.json`)).catch(() => null)
     || await readJSON(path.join(PLANS, `week-${week}.json`)).catch(() => null) : null;
-  const [courses, marks, profiles] = await Promise.all([loadDir(COURSES), loadDir(MARKS), loadDir(PROFILES)]);
+  const [courses, marks, profiles, snotes, cnotes] = await Promise.all([loadDir(COURSES), loadDir(MARKS), loadDir(PROFILES), loadDir(SNOTES), loadDir(CNOTES)]);
   const hashes = {};
   for (const [cid, f] of Object.entries(marks.out)) { hashes[cid] = {}; for (const [sid, m] of Object.entries((f && f.students) || {})) hashes[cid][sid] = markHash(m); }
   return { ok: true, rev: await revision(), now: Date.now(), today: todayISO(), school: school || {}, weeks: ws, week, plan,
            handouts: await handouts(school || {}, plan), courses: courses.out, marks: marks.out, hashes, profiles: profiles.out,
+           snotes: snotes.out, cnotes: cnotes.out,
            prep: (await readJSON(PREP).catch(() => null)) || {}, overrides: (await readJSON(OVERRIDES).catch(() => null)) || {},
            requests: ((await readJSON(REQUESTS).catch(() => null)) || {}).items || [], activity: await tailActivity(),
            inbox: (await list(INBOX, "")).filter(n => !n.startsWith(".")).length,
-           bad: [...courses.bad, ...marks.bad, ...profiles.bad], schoolBad: !school };
+           bad: [...courses.bad, ...marks.bad, ...profiles.bad, ...snotes.bad, ...cnotes.bad], schoolBad: !school };
 }
 // Only files under DATA_DIR, and only after symlinks are resolved.
 function safePath(rel) {
@@ -283,6 +286,64 @@ async function addHomework(b, by) {
   });
   await log({ by, did: "assigned", what: `${b.course}: ${title}, due ${b.due}`, n: 1 });
   return col;
+}
+// A test the teacher adds from the gradebook, so a stack of tests can be scored in the app.
+// `outOf` is the whole test: a test grade is points over the full test, not over what was tried.
+async function addTest(b, by) {
+  const title = (str(b.title, 120) || "").trim(), outOf = +b.outOf;
+  if (!ID.test(b.course || "") || !title || !ISO.test(b.due || "") || !(Number.isFinite(outOf) && outOf > 0 && outOf <= 1000)) throw bad("bad_test");
+  const id = `test-${b.course}-${b.due}-${crypto.randomBytes(2).toString("hex")}`;
+  const col = await serial(async () => {
+    const file = path.join(COURSES, b.course + ".json");
+    const c = await readJSON(file);
+    if (!c || !Array.isArray(c.columns)) throw Object.assign(new Error("no_such_course"), { code: 404 });
+    const col = { id, week: Number.isFinite(+b.week) ? +b.week : null, kind: "TEST", title, due: b.due, outOf };
+    c.columns.push(col);
+    await writeJSON(file, c);
+    return col;
+  });
+  await log({ by, did: "added", what: `${b.course}: test ${title}, out of ${outOf}`, n: 1 });
+  return col;
+}
+// Notes on one student, kept for report cards. Append only from the app; `col` ties a note to
+// one assignment. Each note has its own id so one can be taken back without touching the rest.
+async function studentNote(b, by) {
+  if (!ID.test(b.sid || "")) throw bad("bad_sid");
+  return serial(async () => {
+    const file = path.join(SNOTES, b.sid + ".json");
+    const doc = (await readJSON(file)) || { items: [] };
+    if (!Array.isArray(doc.items)) doc.items = [];
+    if (b.del) {
+      if (!ID.test(b.id || "")) throw bad("bad_id");
+      doc.items = doc.items.filter(x => x.id !== b.id);
+    } else {
+      const text = (str(b.text, 2000) || "").trim();
+      if (!text) throw bad("empty_note");
+      if (b.col != null && !ID.test(b.col)) throw bad("bad_col");
+      doc.items.push({ id: "n" + Date.now().toString(36) + crypto.randomBytes(2).toString("hex"), at: new Date().toISOString(), by, text, ...(b.col ? { col: b.col } : {}) });
+    }
+    await writeJSON(file, doc);
+    return doc;
+  });
+}
+// The teacher's note on one class on one day. One entry per class per date; saving it again
+// replaces it and an empty note removes it. Claude reads Notes/<class>.json before planning.
+async function classNote(b, by) {
+  if (!ID.test(b.cls || "") || !ISO.test(b.date || "")) throw bad("bad_note");
+  return serial(async () => {
+    const file = path.join(CNOTES, b.cls + ".json");
+    const doc = (await readJSON(file)) || { notes: [] };
+    if (!Array.isArray(doc.notes)) doc.notes = [];
+    const text = (str(b.text, 4000) || "").trim(), i = doc.notes.findIndex(x => x.date === b.date);
+    if (!text) { if (i >= 0) doc.notes.splice(i, 1); }
+    else {
+      const entry = { date: b.date, week: Number.isFinite(+b.week) ? +b.week : null, day: /^[a-z]{3}$/.test(b.day || "") ? b.day : null, text, by, at: new Date().toISOString() };
+      if (i >= 0) doc.notes[i] = entry; else doc.notes.push(entry);
+      doc.notes.sort((x, y) => x.date < y.date ? -1 : x.date > y.date ? 1 : 0);
+    }
+    await writeJSON(file, doc);
+    return doc;
+  });
 }
 async function profilePut(b, by) {
   if (!ID.test(b.sid || "") || !isObj(b.data)) throw bad("bad_profile");
@@ -453,6 +514,9 @@ async function handle(req, res) {
   if (req.method === "POST" && p === "/api/marks") { const b = await body(req); return send(res, 200, { ok: true, results: await markOps(b.ops, by) }); }
   if (req.method === "POST" && p === "/api/column") return send(res, 200, { ok: true, doc: await columnPatch(await body(req)) });
   if (req.method === "POST" && p === "/api/hw") return send(res, 200, { ok: true, col: await addHomework(await body(req), by) });
+  if (req.method === "POST" && p === "/api/test") return send(res, 200, { ok: true, col: await addTest(await body(req), by) });
+  if (req.method === "POST" && p === "/api/snote") return send(res, 200, { ok: true, doc: await studentNote(await body(req), by) });
+  if (req.method === "POST" && p === "/api/classnote") return send(res, 200, { ok: true, doc: await classNote(await body(req), by) });
   if (req.method === "POST" && p === "/api/xt") return send(res, 200, { ok: true, col: await ensureExitTicket(await body(req)) });
   if (req.method === "PUT" && p === "/api/profile") return send(res, 200, await profilePut(await body(req), by));
   if (req.method === "POST" && p === "/api/prep") return send(res, 200, { ok: true, prep: await prepTick(await body(req)) });

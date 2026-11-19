@@ -44,7 +44,7 @@ const S = {
   d: null, view: "today", day: null, cls: null, course: null, sid: null, cid: null, back: null,
   gmode: LS.get("btb.gmode", "all"), gweek: null, sel: null, buf: "", sheet: null,
   filter: "all", sort: "name", showAll: false, wtab: "plan", lib: "games", week: null,
-  gradesOpen: LS.get("btb.grades", "0") === "1", editProfile: false,
+  gradesOpen: LS.get("btb.grades", "0") === "1", editProfile: false, akind: LS.get("btb.akind", "all"), amiss: false,
   q: [], flushing: false, save: "saved", savedAt: null, undo: [], conflicts: [], pending: false, lastLive: undefined, error: null
 };
 try { S.q = JSON.parse(LS.get("btb.q", "[]")) || []; } catch { S.q = []; }
@@ -224,6 +224,62 @@ function classStats(c) {
   const st = c.students.map(s => stats(c, s.id)).filter(x => x.avg != null);
   return { acc: st.length ? st.reduce((a, x) => a + x.avg, 0) / st.length : null, att: st.length ? st.reduce((a, x) => a + (x.att ?? 0), 0) / st.length : null };
 }
+
+/* grading:start — the grade that counts. Pure: it reads only mark(), colX(), isScored() and
+   school(), so the smoke test runs this block on its own.
+   Tests and homework are the two categories (school.json `grading`, default 60 / 40).
+   A test is points over the WHOLE test (the larger of the column's and the mark's outOf), summed
+   across tests, so a longer test weighs more. A homework is completion (done 1, partial ½,
+   not in 0) mixed with accuracy (pts / outOf) 70 / 30 — but only when it has a score; one with
+   no score counts on completion alone. Absent, excused, nopage and unmarked are left out, never
+   zero. A missing test is left out of the average and counted as missing instead.
+   Worksheets, sub days, extra practice and exit tickets are shown but never counted. */
+function weights() {
+  const g = school().grading || {}, n = (v, d) => Number.isFinite(+v) && v !== null && v !== "" && +v >= 0 ? +v : d;
+  return { tests: n(g.tests, 60), homework: n(g.homework, 40), completion: n(g.completion, 70), accuracy: n(g.accuracy, 30) };
+}
+const COMP = { done: 1, partial: 0.5, notin: 0 };
+function hwPart(m, col) {
+  if (!m || COMP[m.status] == null) return null;
+  const o = m.outOf || col.outOf, w = weights();
+  const acc = m.status !== "notin" && m.pts != null && o ? Math.min(1, m.pts / o) : null;
+  const score = acc == null || !(w.completion + w.accuracy) ? COMP[m.status] : (w.completion * COMP[m.status] + w.accuracy * acc) / (w.completion + w.accuracy);
+  return { comp: COMP[m.status], acc, score };
+}
+function testPts(m, col) {
+  if (!isScored(m) || m.pts == null) return null;
+  const o = Math.max(+col.outOf || 0, +m.outOf || 0);
+  return o ? { pts: Math.min(m.pts, o), outOf: o } : null;
+}
+const testPct = (m, col) => { const t = testPts(m, col); return t ? 100 * t.pts / t.outOf : null; };
+function grade(c, sid) {
+  let tp = 0, to = 0, nT = 0;
+  const hw = [], comp = [], acc = [];
+  for (const col of c.columns) {
+    if (colX(col)) continue;
+    const m = mark(col.id, sid);
+    if (col.kind === "TEST") { const t = testPts(m, col); if (t) { tp += t.pts; to += t.outOf; nT++; } }
+    else if (col.kind === "HW") { const x = hwPart(m, col); if (x) { hw.push(100 * x.score); comp.push(100 * x.comp); if (x.acc != null) acc.push(100 * x.acc); } }
+  }
+  const avg = a => a.length ? a.reduce((s, v) => s + v, 0) / a.length : null;
+  const w = weights(), tests = to ? 100 * tp / to : null, homework = avg(hw);
+  const parts = [[tests, w.tests], [homework, w.homework]].filter(([v, wt]) => v != null && wt > 0);
+  const den = parts.reduce((s, [, wt]) => s + wt, 0);
+  return { grade: den ? parts.reduce((s, [v, wt]) => s + v * wt, 0) / den : null, tests, nTests: nT, homework, nHw: hw.length, comp: avg(comp), acc: avg(acc), nAcc: acc.length };
+}
+function classGrade(c) {
+  const g = c.students.map(s => grade(c, s.id)), mean = k => { const v = g.map(x => x[k]).filter(x => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
+  return { grade: mean("grade"), tests: mean("tests"), homework: mean("homework"), n: g.filter(x => x.grade != null).length };
+}
+/* grading:end */
+// What each student owes: missing tests, worksheets and sub-day sheets, and homework not in.
+function missingFor(c, sid) {
+  return c.columns.filter(col => !colX(col) && col.kind !== "XT" && col.kind !== "XP").filter(col => {
+    const s = (mark(col.id, sid) || {}).status; return s === "missing" || (col.kind === "HW" && s === "notin");
+  });
+}
+const slipping = c => c.students.map(s => ({ s, x: stats(c, s.id) })).filter(r => r.x.n >= 4 && r.x.trend < -4).sort((a, b) => a.x.trend - b.x.trend);
+const wtxt = () => { const w = weights(); return `tests ${w.tests} · homework ${w.homework} (${w.completion}% done, ${w.accuracy}% right)`; };
 
 /* ---------------------------------------------------------------- homework */
 // A homework column carries `assigned` (handed out) and `due` (collected). Today prompts for
@@ -454,27 +510,58 @@ function viewToday() {
   const steps = segs.map(s => {
     const t0 = it.start + s.from, state = isToday(S.day) ? (nowMin() >= it.start + s.to ? "past" : segNow && segNow.k === s.k ? "now" : "") : "";
     const progress = state === "now" ? `<div class="prog"><i style="width:${Math.round(100 * (off - s.from) / Math.max(1, s.to - s.from))}%"></i></div>` : "";
-    return `<div class="step ${state}"><div class="t">${clock(t0)}</div><div><div class="n">${esc(s.name)}${s.tag ? `<span class="tag">${esc(s.tag)}</span>` : ""}</div>
-      <div class="d">${segBody(s.k, d, it, course, showNames)}</div>${progress}</div>
-      <div class="m">${state === "now" ? (it.start + s.to - nowMin()) + "m left" : (s.to - s.from) + "m"}</div></div>`;
+    return `<div class="step ${state}" id="step-${esc(s.k)}"><div class="t">${clock(t0)}<span class="m">${state === "now" ? (it.start + s.to - nowMin()) + "m left" : (s.to - s.from) + " min"}</span></div><div><div class="n">${esc(s.name)}${s.tag ? `<span class="tag">${esc(s.tag)}</span>` : ""}</div>
+      <div class="d">${segBody(s.k, d, it, course, showNames)}</div>${progress}</div></div>`;
   }).join("");
-  const watch = d.watch && d.watch.length ? `<div class="step"><div class="t"></div><div><div class="n" style="color:var(--warn-ink)">Watch for</div><ul class="watch">${d.watch.map(w => `<li>${rich(w)}</li>`).join("")}</ul></div><div></div></div>` : "";
+  // The bell-to-bell bar: every section at its share of the period, the one running now lit.
+  const total = Math.max(1, ...segs.map(s => s.to));
+  const tbar = `<div class="tbar noprint" role="list" aria-label="Sections and their times">${segs.map(s => {
+    const state = isToday(S.day) ? (nowMin() >= it.start + s.to ? "past" : segNow && segNow.k === s.k ? "now" : "") : "";
+    const fill = state === "now" ? `<i style="width:${Math.round(100 * (off - s.from) / Math.max(1, s.to - s.from))}%"></i>` : "";
+    return `<button class="seg-${state || "next"}" role="listitem" data-act="jump" data-v="${esc(s.k)}" style="flex:${Math.max(1, s.to - s.from)} 1 0" title="${esc(s.name)} · ${clock(it.start + s.from)}–${clock(it.start + s.to)}">${fill}<span class="tn">${esc(s.name)}</span><span class="tt">${clock(it.start + s.from)} · ${s.to - s.from}m</span></button>`;
+  }).join("")}${total < (+it.c.len || 45) ? `<span class="tspare" style="flex:${(+it.c.len || 45) - total} 1 0"></span>` : ""}</div>`;
+  const watch = d.watch && d.watch.length ? `<div class="watchbox"><div class="n">Watch for</div><ul class="watch">${d.watch.map(w => `<li>${rich(w)}</li>`).join("")}</ul></div>` : "";
   // What to print for this class today: one line per handout, e.g. "<b>file.pdf</b> pages 1–2 · 10 copies".
   const prints = Array.isArray(d.print) ? d.print.filter(Boolean) : d.print ? [d.print] : [];
   const print = prints.length ? `<div class="printbox"><div class="n">Print</div><ul>${prints.map(x => `<li>${rich(x)}</li>`).join("")}</ul></div>` : "";
   const gap = d.gap ? `<div class="gap"><b style="color:var(--warn-ink)">Needs a plan</b><div class="small muted">${rich(school().gapNote || "Tell Claude where the class is and what's next.")}</div></div>${reqBox(`${S.d.week}/${it.k}`, it.c.name, "Where is the class? What's next?")}` : "";
-  const dock = course && d.exit ? `<div class="dock noprint"><button class="btn primary block" data-act="score" data-cls="${it.k}">${I.check}Score the exit ticket</button></div>` : "";
+  const exitBtn = course && d.exit ? `<button class="btn primary block noprint" data-act="score" data-cls="${it.k}">${I.check}Score the exit ticket</button>` : "";
 
-  const railCard = `<section class="card railcard">
-    <div class="dayhead"><div><h2>${rich(d.focus || it.c.name)}</h2><div class="small muted" style="margin-top:3px">${esc(planUnit(it.k))}</div></div>
-      ${hand && hand.copies.length ? `<button class="btn sunk noprint" data-act="handouts" data-cls="${it.k}">${I.folder}${hand.files.length ? "Handouts · " + hand.files.length : "Folder"}</button>` : ""}</div>
-    ${d.sub ? `<p class="lede small" style="margin:0 0 8px">${rich(d.sub)}</p>` : ""}
-    ${print}${hwBox(it.k, S.day, showNames)}${steps}${watch}${gap}${dock}</section>`;
-  const pane = gradesHere && S.gradesOpen ? `<section class="card gpane">${miniGrid(course, li.live && li.live.k === it.k ? needs(courseOf(course)).slice(0, 6).map(n => n.sid) : [])}
-    <p class="small muted" style="margin:10px 0 0">Grades hide themselves when the next class starts, so they never open on the projector.</p></section>` : "";
+  const main = `<section class="card railcard">
+    <div class="dayhead"><h2>${rich(d.focus || it.c.name)}</h2>${planUnit(it.k) ? `<div class="unit">${esc(planUnit(it.k))}</div>` : ""}</div>
+    ${d.sub ? `<p class="sub">${rich(d.sub)}</p>` : ""}
+    ${tbar}<div class="steps">${steps}</div>${watch}${gap}${noteBox(it)}</section>`;
+  const side = `<aside class="side">${filesBox(it.k, hand)}${print}${hwBox(it.k, S.day, showNames)}${exitBtn}
+    ${gradesHere && S.gradesOpen ? `<section class="card gpane">${miniGrid(course, li.live && li.live.k === it.k ? needs(courseOf(course)).slice(0, 6).map(n => n.sid) : [])}
+    <p class="small muted" style="margin:10px 0 0">Grades hide themselves when the next class starts, so they never open on the projector.</p></section>` : ""}</aside>`;
   return head({ eyebrow: `${esc(dayMeta.label)}${isToday(S.day) ? " · today" : ""} · ${esc(p.label || "Week " + S.d.week)}${p.note ? " · " + esc(p.note) : ""}`,
                 title: esc(it.c.name), dot: ccol(it.c), lede, tools }) + daysBar + strip +
-    `<div class="todaygrid ${gradesHere && !S.gradesOpen ? "closed" : ""}" style="margin-top:12px">${railCard}${pane}</div>`;
+    `<div class="todaygrid${gradesHere && S.gradesOpen ? " wide" : ""}" style="margin-top:12px">${main}${side}</div>${worksheetDock(it.k, hand)}`;
+}
+// The worksheet, always in the same place: top of the side column on a laptop, a button over
+// the tab bar on a phone. One file opens straight away; the folder and its other files are a tap on.
+function filesBox(k, hand) {
+  if (!hand || !hand.copies.length) return `<section class="card files"><div class="n">Worksheet</div><div class="small muted">No handouts folder for this class.</div></section>`;
+  const open = f => `api/file?p=${encodeURIComponent(hand.dir + "/" + f)}`;
+  return `<section class="card files noprint"><div class="row" style="justify-content:space-between"><div class="n">Worksheet${hand.files.length > 1 ? "s · " + hand.files.length : ""}</div><button class="link small" data-act="handouts" data-cls="${k}">${I.folder} Folder</button></div>
+    ${hand.files.length ? hand.files.map((f, i) => `<a class="btn ${i ? "sunk" : "primary"} fileb" href="${open(f)}" target="_blank" rel="noopener">${I.open}<span>${esc(f.replace(/\.pdf$/i, ""))}</span></a>`).join("")
+      : `<div class="small muted">${hand.missing ? "This week's folder isn't there yet." : "Nothing in the folder yet."}</div>`}</section>`;
+}
+function worksheetDock(k, hand) {
+  if (desk() || !hand || !hand.files.length) return "";
+  const one = hand.files.length === 1;
+  return `<div class="wdock noprint">${one ? `<a class="btn primary block" href="api/file?p=${encodeURIComponent(hand.dir + "/" + hand.files[0])}" target="_blank" rel="noopener">${I.open}Worksheet</a>`
+    : `<button class="btn primary block" data-act="handouts" data-cls="${k}">${I.open}Worksheets · ${hand.files.length}</button>`}</div>`;
+}
+// A note on this class for Claude, one per class per day, kept in Notes/<class>.json.
+function noteBox(it) {
+  const iso = dayIso(S.day); if (!iso) return "";
+  const notes = ((S.d.cnotes || {})[it.k] || {}).notes || [], cur = notes.find(n => n.date === iso);
+  const earlier = notes.filter(n => n.date < iso).slice(-3).reverse();
+  return `<div class="cnote noprint"><label class="n" for="cn-${it.k}">Notes for Claude · ${esc(it.c.short || it.c.name)}</label>
+    <textarea id="cn-${it.k}" data-cnote="${it.k}" data-date="${iso}" placeholder="How it went, where they got to, who needs what. Claude reads this the next time you ask about ${esc(it.c.name)}.">${esc(cur ? cur.text : "")}</textarea>
+    <div class="small muted">Saves when you click away.${cur ? " Saved " + esc(new Date(cur.at).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })) + "." : ""}</div>
+    ${earlier.length ? `<details class="earlier"><summary class="small">Earlier notes · ${earlier.length}</summary>${earlier.map(n => `<div class="small"><b>${esc(niceDate(n.date))}</b> ${esc(n.text)}</div>`).join("")}</details>` : ""}</div>`;
 }
 function segBody(k, d, it, course, showNames) {
   const p = v => v ? `<p>${rich(v)}</p>` : "";
@@ -577,23 +664,76 @@ function cellHTML(c, s, w) {
 function viewGrades() {
   const c = courseOf(S.course);
   if (!c) return head({ title: "Grades", lede: "No courses in the gradebook folder yet." });
-  const cs = classStats(c), nd = needs(c), open = claudeOpen(S.course);
-  const scanB = `<button class="btn sunk noprint" data-act="scan" aria-label="Scan sheets for Claude">${I.cam}Scan</button>`, tools = desk() ? scanB : "";
-  let h = head({ eyebrow: `${esc(c.name)} · ${c.students.length} students`, title: "Grades",
-    lede: cs.acc != null ? `<b>${fmt(cs.acc)}%</b> right on what they try, and they finish <b>${fmt(cs.att)}%</b> of each packet.` : "Nothing scored yet.", tools });
-  h += `<div class="row noprint" style="margin-bottom:10px">${courseSeg()}<div class="seg"><button data-act="gmode" data-v="all" aria-pressed="${S.gmode === "all"}">All weeks</button><button data-act="gmode" data-v="week" aria-pressed="${S.gmode === "week"}">One week</button></div>${desk() ? "" : scanB}</div>`;
+  const open = claudeOpen(S.course);
+  const scanB = `<button class="btn sunk noprint" data-act="scan" aria-label="Scan sheets for Claude">${I.cam}Scan</button>`;
+  const addB = `<button class="btn noprint" data-act="newcol" data-v="TEST">+ Test</button><button class="btn noprint" data-act="newcol" data-v="HW">+ Homework</button>`;
+  let h = head({ eyebrow: `${esc(c.name)} · ${c.students.length} students`, title: "Grades", lede: `The grade counts ${esc(wtxt())}. Worksheets show here but don't count.`, tools: desk() ? addB + scanB : "" });
+  if (!["all", "asg", "week"].includes(S.gmode)) S.gmode = "all";
+  h += `<div class="row noprint" style="margin-bottom:10px">${courseSeg()}<div class="seg"><button data-act="gmode" data-v="all" aria-pressed="${S.gmode === "all"}">Overview</button><button data-act="gmode" data-v="asg" aria-pressed="${S.gmode === "asg"}">Assignments</button><button data-act="gmode" data-v="week" aria-pressed="${S.gmode === "week"}">One week</button></div>${desk() ? "" : addB + scanB}</div>`;
   if (open.length) h += `<button class="banner noprint" data-act="go" data-v="review" style="margin-bottom:10px"><span class="row"><span class="dia"></span>Claude scored ${open.length} mark${open.length > 1 ? "s" : ""} here · not checked yet</span>${I.r}</button>`;
-  if (nd.length) h += `<div class="note-soft" style="margin-bottom:10px"><b>Needs you:</b> ${nd.slice(0, 5).map(n => `<button class="link" style="color:inherit;text-decoration:underline" data-act="student" data-sid="${n.sid}">${esc(n.name)}</button> ${esc(n.txt)}`).join(" · ")}</div>`;
   if (S.gmode === "week") return h + weekGrid(c);
+  if (S.gmode === "asg") return h + asgGrid(c);
+  h += glance(c);
   const ws = weeksOf(c);
-  h += `<section class="card" style="padding:6px 10px"><div class="scroll" data-keepx="grid-${S.course}" data-endx="1"><table class="gtable" style="min-width:${180 + ws.length * 44}px"><thead><tr><th style="text-align:left;padding-left:6px">Student</th>${ws.map(w => `<th><button class="wh" data-act="sheetcol" data-cid="${(mainCol(c, w) || {}).id || ""}" title="${esc(weekTopic(c, w))}">${w}</button></th>`).join("")}<th style="text-align:right;padding-right:6px">All</th></tr></thead><tbody>`;
+  h += `<section class="card" style="padding:6px 10px"><div class="scroll" data-keepx="grid-${S.course}" data-endx="1"><table class="gtable" style="min-width:${200 + ws.length * 44}px"><thead><tr><th style="text-align:left;padding-left:6px">Student</th>${ws.map(w => `<th><button class="wh" data-act="sheetcol" data-cid="${(mainCol(c, w) || {}).id || ""}" title="${esc(weekTopic(c, w))}">${w}</button></th>`).join("")}<th style="text-align:right;padding-right:6px">Grade</th></tr></thead><tbody>`;
   for (const s of c.students) {
-    const x = stats(c, s.id), tt = trendTxt(x.trend);
-    h += `<tr><th scope="row" style="text-align:left"><button class="nm" data-act="student" data-sid="${s.id}">${esc(s.name)}</button></th>${ws.map(w => cellHTML(c, s, w)).join("")}<td class="ov ${x.avg != null && x.avg < 65 ? "low" : ""}">${fmt(x.avg)}${x.avg != null ? "%" : ""}<small>${x.n >= 4 ? tt[0] : x.n + " sheets"}</small></td></tr>`;
+    const g = grade(c, s.id), x = stats(c, s.id), tt = trendTxt(x.trend);
+    h += `<tr><th scope="row" style="text-align:left"><button class="nm" data-act="student" data-sid="${s.id}">${esc(s.name)}</button></th>${ws.map(w => cellHTML(c, s, w)).join("")}<td class="ov ${g.grade != null && g.grade < 70 ? "low" : ""}">${g.grade != null ? fmt(g.grade) + "%" : "—"}<small class="${x.n >= 4 ? tt[1] : ""}">${x.n >= 4 ? tt[0] : x.n + " sheets"}</small></td></tr>`;
   }
   h += `</tbody></table></div></section>
-  <div class="legend"><span><i class="sw" style="background:var(--q1)"></i>90+</span><span><i class="sw" style="background:var(--q2)"></i>80s</span><span><i class="sw" style="background:var(--q3)"></i>70s</span><span><i class="sw" style="background:var(--q4)"></i>60s</span><span><i class="sw" style="background:var(--q5)"></i>Under 60</span><span>Fill = share of the work done</span><span><span class="dot miss" style="width:12px;height:12px"></span>Missing</span><span><span class="dot abs" style="width:12px;height:12px"></span>Absent</span><span><span class="hw done"></span>Homework done</span><span><span class="hw notin"></span>Homework not in</span><span><span class="dia"></span>Claude scored, not checked</span></div>`;
+  <div class="legend"><span>Dots are worksheets, week by week:</span><span><i class="sw" style="background:var(--q1)"></i>90+</span><span><i class="sw" style="background:var(--q2)"></i>80s</span><span><i class="sw" style="background:var(--q3)"></i>70s</span><span><i class="sw" style="background:var(--q4)"></i>60s</span><span><i class="sw" style="background:var(--q5)"></i>Under 60</span><span>Fill = share of the work done</span><span><span class="dot miss" style="width:12px;height:12px"></span>Missing</span><span><span class="dot abs" style="width:12px;height:12px"></span>Absent</span><span><span class="hw done"></span>Homework done</span><span><span class="hw notin"></span>Homework not in</span><span><span class="dia"></span>Claude scored, not checked</span><span>Grade = tests and homework only</span></div>`;
   return h;
+}
+// The three things worth seeing before anything else: the class's grade, who owes what, and who is slipping.
+function glance(c) {
+  const cg = classGrade(c), miss = c.students.map(s => ({ s, m: missingFor(c, s.id) })).filter(r => r.m.length).sort((a, b) => b.m.length - a.m.length);
+  const nMiss = miss.reduce((a, r) => a + r.m.length, 0), sl = slipping(c), under = c.students.filter(s => { const g = grade(c, s.id).grade; return g != null && g < 70; }).length;
+  const avgCard = `<section class="card gl"><div class="k">Class average</div><div class="big ${cg.grade != null && cg.grade < 70 ? "low" : ""}">${cg.grade != null ? fmt(cg.grade) + "%" : "—"}</div>
+    <div class="glrow"><span>Tests</span><b>${cg.tests != null ? fmt(cg.tests) + "%" : "none yet"}</b></div><div class="glrow"><span>Homework</span><b>${cg.homework != null ? fmt(cg.homework) + "%" : "none yet"}</b></div>
+    <div class="small ${under ? "low" : "muted"}" style="margin-top:6px">${under ? `${under} under 70%` : cg.n ? "Nobody under 70%" : "Nothing counted yet"}</div></section>`;
+  const missCard = `<section class="card gl"><div class="row" style="justify-content:space-between"><div class="k">Missing</div><button class="link small" data-act="asgmiss">See the grid ${I.r}</button></div><div class="big ${nMiss ? "low" : ""}">${nMiss}</div>
+    ${miss.slice(0, 4).map(r => `<button class="glrow link" data-act="student" data-sid="${r.s.id}"><span>${esc(r.s.name)}</span><b>${r.m.length}</b></button>`).join("") || '<div class="small muted">Nothing missing.</div>'}
+    ${miss.length > 4 ? `<div class="small muted">and ${miss.length - 4} more</div>` : ""}</section>`;
+  const slipCard = `<section class="card gl slip"><div class="k">Slipping</div>${sl.length ? sl.slice(0, 4).map(r => `<div class="slr"><button class="link" data-act="student" data-sid="${r.s.id}" style="color:var(--fg)">${esc(first(r.s.name))}</button>${spark(r.x.weeks.slice(-8), true)}<span class="small low">${fmt(r.x.weeks[r.x.weeks.length - 1])}%</span><button class="btn sunk mini" data-act="snote" data-sid="${r.s.id}" aria-label="Note on ${esc(r.s.name)}">+ Note</button></div>`).join("")
+    : '<div class="small muted" style="margin-top:6px">Nobody is slipping. A student shows here when the last three weeks of worksheets are well below the first three.</div>'}
+    ${sl.length > 4 ? `<button class="link small" data-act="go" data-v="students">and ${sl.length - 4} more</button>` : ""}</section>`;
+  return `<div class="glance">${avgCard}${missCard}${slipCard}</div>`;
+}
+// Every assignment across, every student down: what each one has, and what they still owe.
+const AK = { all: ["All", () => true], TEST: ["Tests", col => col.kind === "TEST"], HW: ["Homework", col => col.kind === "HW" || col.kind === "XP"], CW: ["Worksheets", col => ["CW", "SUB"].includes(col.kind)], XT: ["Exit tickets", col => col.kind === "XT"] };
+const ABBR = { CW: "WS", HW: "HW", XP: "XP", SUB: "Sub", TEST: "Test", XT: "Exit" };
+function asgCell(col, s) {
+  const m = mark(col.id, s.id), base = `data-act="edit" data-sid="${s.id}" data-cid="${col.id}"`, dia = isClaude(m) ? '<span class="dia"></span>' : "";
+  const lab = t => `aria-label="${esc(s.name)}, ${esc(col.title)}: ${esc(t)}" title="${esc(col.title)}: ${esc(t)}"`;
+  if (colX(col)) return `<button class="ac x" ${base} ${lab("excused for the class")}>·</button>`;
+  if (!m) return `<button class="ac none" ${base} ${lab("no mark")}></button>`;
+  if (col.kind === "XP" && m.status === "notin") return `<button class="ac st" ${base} ${lab("not in (extra practice, not owed)")}>✗${dia}</button>`;
+  if (m.status === "missing" || m.status === "notin") return `<button class="ac miss" ${base} ${lab(m.status === "notin" ? "not in" : "missing")}>${m.status === "notin" ? "✗" : "M"}${dia}</button>`;
+  if (isComp(col)) {
+    const x = hwPart(m, col);
+    if (x) return `<button class="ac hw${m.status}" ${base} ${lab(LABEL[m.status] + (x.acc != null ? `, ${Math.round(100 * x.acc)}% right` : ""))}>${m.status === "done" ? "✓" : "½"}${x.acc != null ? `<small>${Math.round(100 * x.acc)}</small>` : ""}${dia}</button>`;
+  }
+  if (isScored(m) && m.pts != null) {
+    const p = col.kind === "TEST" ? testPct(m, col) : pct(m, col);
+    return `<button class="ac sc" ${base} ${lab(Math.round(p ?? 0) + "%")} style="--c:var(--q${band(p ?? 0)})">${fmt(p)}${dia}</button>`;
+  }
+  return `<button class="ac st" ${base} ${lab(LABEL[m.status] || m.status)}>${{ absent: "A", excused: "Ex", nopage: "?" }[m.status] || "·"}${dia}</button>`;
+}
+function asgGrid(c) {
+  if (!AK[S.akind]) S.akind = "all";
+  const cols = c.columns.filter(AK[S.akind][1]).map((col, i) => ({ col, i })).sort((a, b) => (a.col.week ?? 99) - (b.col.week ?? 99) || a.i - b.i).map(x => x.col);
+  let rows = c.students.map(s => ({ s, miss: cols.filter(col => !colX(col) && col.kind !== "XP" && col.kind !== "XT" && ["missing", "notin"].includes((mark(col.id, s.id) || {}).status)).length, g: grade(c, s.id) }));
+  if (S.amiss) rows = rows.filter(r => r.miss);
+  const bar = `<div class="row noprint" style="margin-bottom:10px">${Object.entries(AK).map(([k, [t]]) => `<button class="chip" data-act="akind" data-v="${k}" aria-pressed="${S.akind === k}">${t}</button>`).join("")}<button class="chip" data-act="amiss" aria-pressed="${!!S.amiss}">Only who owes something</button></div>`;
+  if (!cols.length) return bar + '<div class="card empty">No assignments of this kind yet.</div>';
+  const tpl = `grid-template-columns:minmax(120px,170px) repeat(${cols.length},46px) 64px 60px`;
+  let g = `<section class="card" style="padding:8px 10px"><div class="scroll" data-keepx="asg-${S.course}-${S.akind}" data-endx="1"><div class="agrid" style="${tpl}">
+    <div class="ah nm0">Student</div>${cols.map(col => `<button class="ah" data-act="sheetcol" data-cid="${col.id}" title="${esc(col.title)}${col.due ? " · due " + esc(col.due) : ""}"><span class="ak ${col.kind}">${ABBR[col.kind] || col.kind}</span><span>${col.week != null ? "Wk " + col.week : ""}</span><span class="atl">${esc(col.title)}</span></button>`).join("")}<div class="ah r">Owes</div><div class="ah r">Grade</div>`;
+  for (const r of rows) g += `<button class="an" data-act="student" data-sid="${r.s.id}">${esc(r.s.name)}</button>${cols.map(col => asgCell(col, r.s)).join("")}<div class="ar ${r.miss ? "low" : "muted"}">${r.miss || "—"}</div><div class="ar ${r.g.grade != null && r.g.grade < 70 ? "low" : ""}">${r.g.grade != null ? fmt(r.g.grade) + "%" : "—"}</div>`;
+  if (!rows.length) g += `<div class="small muted" style="grid-column:1/-1;padding:14px 4px">Nobody owes anything here.</div>`;
+  g += `</div></div></section>
+    <div class="legend"><span><b>M</b> missing</span><span><b>✗</b> homework not in</span><span><b>✓</b> done · <b>½</b> partial (small number: % right)</span><span><b>A</b> absent</span><span><b>Ex</b> excused</span><span><b>?</b> page not sorted yet</span><span>Numbers are % (tests over the whole test)</span><span>Click a heading to open it and score the class</span></div>`;
+  return bar + g;
 }
 function gweekOf(c) {
   const ws = weeksOf(c); if (!ws.length) return null;
@@ -662,6 +802,8 @@ function editorHTML(col, sid, bare) {
     }
     h += `<label class="chk"><input type="checkbox" data-f="inc" ${ed} ${m.inc ? "checked" : ""}${ro}> Incomplete (say where they stopped in the note)</label>`;
   }
+  if (comp && col.kind === "HW") h += `<div class="ptsrow"><div style="flex:1"><label class="k" style="display:block;margin-bottom:4px" for="pts-${sid}-${col.id}">Accuracy (optional)</label><input id="pts-${sid}-${col.id}" inputmode="decimal" data-f="pts" ${ed} value="${m.pts ?? ""}" placeholder="—"${ro}> <span class="of">of</span> <input aria-label="Out of" inputmode="decimal" data-f="outOf" ${ed} value="${m.outOf ?? ""}" placeholder="10" style="width:64px;font-size:18px"${ro}></div></div>
+    <div class="small muted" style="margin-top:-6px">Counts ${weights().accuracy}% of this homework when it's there; done counts ${weights().completion}%.</div>`;
   if (col.kind === "XT" && isScored(m)) h += `<div class="xseg" role="group" aria-label="Exit ticket">${[[2, "✓", "r"], [1, "½", "h"], [0, "✗", "w"]].map(([v, t, c]) => `<button class="${c}" data-act="xt" data-v="${c}" ${ed} aria-pressed="${m.pts === v}"${ro}>${t}</button>`).join("")}</div>`;
   h += `<div><label class="k" style="display:block;margin-bottom:6px" for="note-${sid}-${col.id}">Note</label><textarea id="note-${sid}-${col.id}" data-f="note" ${ed} placeholder="e.g. scaled the bottom but not the top"${ro}>${esc(m.note || "")}</textarea></div>`;
   if (m.scan) h += `<a class="link small" href="api/file?p=${encodeURIComponent(m.scan)}" target="_blank" rel="noopener">Open the scan</a>`;
@@ -678,15 +820,16 @@ function viewStudents() {
   const c = courseOf(S.course);
   if (!c) return head({ title: "Students", lede: "No courses in the gradebook folder yet." });
   const fl = new Set(needs(c).map(n => n.sid));
-  let list = c.students.map(s => ({ s, x: stats(c, s.id), p: S.d.profiles[s.id] || {} }));
+  let list = c.students.map(s => ({ s, x: stats(c, s.id), g: grade(c, s.id), p: S.d.profiles[s.id] || {} }));
   if (S.filter === "flag") list = list.filter(r => fl.has(r.s.id));
-  if (S.sort === "low") list.sort((a, b) => (a.x.avg ?? 999) - (b.x.avg ?? 999));
+  if (S.sort === "low") list.sort((a, b) => (a.g.grade ?? 999) - (b.g.grade ?? 999));
   const hwc = c.columns.filter(col => col.kind === "HW" && !colX(col));
   return head({ eyebrow: `${esc(c.name)} · ${c.students.length} students`, title: "Students" }) +
     `<div class="row noprint" style="margin-bottom:12px">${courseSeg()}<button class="chip" data-act="filter" data-v="all" aria-pressed="${S.filter === "all"}">Everyone</button><button class="chip" data-act="filter" data-v="flag" aria-pressed="${S.filter === "flag"}">Needs a check-in · ${fl.size}</button><button class="chip" data-act="sort" aria-pressed="${S.sort === "low"}">Lowest first</button></div>
-    <div class="cards">${list.map(({ s, x, p }) => { const tt = trendTxt(x.trend), low = x.avg != null && x.avg < 65;
+    <div class="cards">${list.map(({ s, x, g, p }) => { const tt = trendTxt(x.trend), low = g.grade != null && g.grade < 70;
       return `<button class="scard${fl.has(s.id) ? " flag" : ""}" data-act="student" data-sid="${s.id}">
-        <div class="row" style="justify-content:space-between;align-items:flex-start"><div><div style="font-size:18px;font-weight:700">${esc(s.name)}</div><div class="small ${x.n >= 4 ? tt[1] : "muted"}" style="font-weight:600">${x.n >= 4 ? tt[0] : x.n + " sheets scored"}</div></div><div style="font-size:28px;font-weight:800" class="${low ? "low" : ""}">${fmt(x.avg)}${x.avg != null ? "%" : ""}</div></div>
+        <div class="row" style="justify-content:space-between;align-items:flex-start"><div><div style="font-size:18px;font-weight:700">${esc(s.name)}</div><div class="small ${x.n >= 4 ? tt[1] : "muted"}" style="font-weight:600">${x.n >= 4 ? tt[0] : x.n + " sheets scored"}</div></div><div style="text-align:right"><div style="font-size:28px;font-weight:800;line-height:1.1" class="${low ? "low" : ""}">${g.grade != null ? fmt(g.grade) + "%" : "—"}</div><div class="small muted">grade</div></div></div>
+        <div class="row small muted" style="justify-content:space-between"><span>Worksheets, week by week</span><b style="color:var(--fg2)">${fmt(x.avg)}${x.avg != null ? "% right" : ""}</b></div>
         ${spark(x.weeks, x.trend < -4)}
         <div class="row small muted" style="justify-content:space-between"><span>Finishes the packet</span><b style="color:var(--fg2)">${fmt(x.att)}%</b></div><div class="meter" style="margin-top:-6px"><i style="width:${Math.round(x.att || 0)}%"></i></div>
         <div class="row small muted" style="justify-content:space-between"><span>Homework ${esc(x.hw)}</span><span style="display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end">${hwc.map(col => { const st = (mark(col.id, s.id) || {}).status; return `<span class="sq" title="${esc(col.title)}" style="background:${st === "done" || st === "partial" ? "var(--q2)" : st === "notin" ? "var(--q5)" : "var(--sunk)"}"></span>`; }).join("")}</span></div>
@@ -696,23 +839,27 @@ function viewStudents() {
 function viewStudent() {
   const f = findStudent(S.sid), c = f.c, st = f.s; S.course = f.cid;
   const i = c.students.findIndex(s => s.id === st.id), prev = c.students[(i - 1 + c.students.length) % c.students.length], next = c.students[(i + 1) % c.students.length];
-  const x = stats(c, st.id), p = S.d.profiles[st.id] || {}, tt = trendTxt(x.trend), low = x.avg != null && x.avg < 65;
+  const x = stats(c, st.id), g = grade(c, st.id), p = S.d.profiles[st.id] || {}, tt = trendTxt(x.trend), low = x.avg != null && x.avg < 65;
   const ws = weeksOf(c).map(w => ({ w, cell: weekCell(c, st.id, w) }));
   const sh = c.columns.filter(col => !isComp(col) && !colX(col)).map(col => ({ col, m: mark(col.id, st.id) })).filter(r => r.m && r.m.status !== "nopage").reverse();
   const shown = S.showAll ? sh : sh.slice(0, 6);
   const inGroup = (() => { const day = todayKey(); if (!day) return null; const k = dayList(day).find(x => x.c.course === f.cid); return k && needs(c).slice(0, 6).some(n => n.sid === st.id) ? k : null; })();
   const tools = `<button class="btn noprint" data-act="student" data-sid="${prev.id}">← ${esc(first(prev.name))}</button><button class="btn noprint" data-act="student" data-sid="${next.id}">${esc(first(next.name))} →</button>${desk() ? '<button class="btn primary noprint" data-act="print">Print for a conference</button>' : ""}`;
   let h = head({ back: [S.back || "students", S.back === "grades" ? "Grades" : "Students"], eyebrow: esc(c.name), title: esc(st.name), tools,
-    lede: `${x.n} sheets scored · homework ${esc(x.hw)}${x.owed ? ` · owes ${x.owed} from absences` : ""}${x.miss ? ` · ${x.miss} missing` : ""}` });
+    lede: `${x.n} sheets scored · homework ${esc(x.hw)}${x.owed ? ` · owes ${x.owed} from absences` : ""}${missingFor(c, st.id).length ? ` · ${missingFor(c, st.id).length} missing` : ""}` });
   const profile = S.editProfile ? `<div class="stack"><label class="k" for="pf">Focus</label><textarea id="pf">${esc(p.focus || "")}</textarea><label class="k" for="ps">Solid (comma separated)</label><input type="text" id="ps" value="${esc((p.solid || []).join(", "))}"><label class="k" for="pw">Work on (comma separated)</label><input type="text" id="pw" value="${esc((p.work || []).join(", "))}"><div class="row"><button class="btn primary" data-act="profsave" data-sid="${st.id}">Save</button><button class="btn sunk" data-act="profcancel">Cancel</button></div></div>`
     : `<div style="font-size:15px">${esc(p.focus || "No focus note yet.")}</div>
        ${(p.solid || []).length ? `<div class="row" style="margin-top:8px;gap:6px"><span class="k" style="color:var(--accent-ink);width:56px">Solid</span>${p.solid.map(t => `<span class="tag good">${esc(t)}</span>`).join("")}</div>` : ""}
        ${(p.work || []).length ? `<div class="row" style="margin-top:6px;gap:6px"><span class="k" style="color:var(--warn-ink);width:56px">Work on</span>${p.work.map(t => `<span class="tag work">${esc(t)}</span>`).join("")}</div>` : ""}
        ${inGroup ? `<button class="btn sunk noprint" style="margin-top:10px;width:100%;justify-content:space-between" data-act="openday" data-day="${todayKey()}" data-cls="${inGroup.k}">In today's plan · ${esc(inGroup.c.short || inGroup.c.name)} small group ${I.r}</button>` : ""}`;
-  h += `<div class="kpis" style="margin-bottom:12px">
-    <div class="card kpi"><div class="k">Accuracy</div><div class="v ${low ? "low" : ""}">${fmt(x.avg)}${x.avg != null ? "%" : ""}</div><div class="small ${x.n >= 4 ? tt[1] : "muted"}">${x.last ? Math.round(x.last.p) + "% on the latest sheet" : "No scored sheets yet"}</div>${spark(x.weeks, x.trend < -4)}</div>
+  h += `<div class="kpis three" style="margin-bottom:12px">
+    <div class="card kpi"><div class="k">Grade</div><div class="v ${g.grade != null && g.grade < 70 ? "low" : ""}">${g.grade != null ? fmt(g.grade) + "%" : "—"}</div>
+      <div class="glrow small"><span>Tests · ${g.nTests}</span><b>${g.tests != null ? fmt(g.tests) + "%" : "none yet"}</b></div>
+      <div class="glrow small"><span>Homework · ${g.nHw}</span><b>${g.homework != null ? fmt(g.homework) + "%" : "none yet"}</b></div>
+      ${g.nHw ? `<div class="small muted">${fmt(g.comp)}% done${g.nAcc ? ` · ${fmt(g.acc)}% right on ${g.nAcc} scored` : " · no accuracy scores yet"}</div>` : ""}</div>
+    <div class="card kpi"><div class="k">Worksheets · don't count</div><div class="v ${low ? "low" : ""}">${fmt(x.avg)}${x.avg != null ? "%" : ""}</div><div class="small ${x.n >= 4 ? tt[1] : "muted"}">${x.n >= 4 ? tt[0] + " · " : ""}${x.last ? Math.round(x.last.p) + "% on the latest sheet" : "No scored sheets yet"}</div>${spark(x.weeks, x.trend < -4)}</div>
     <div class="card kpi"><div class="k">Finishes the packet</div><div class="v">${fmt(x.att)}${x.att != null ? "%" : ""}</div><div class="small muted">average share attempted</div><div class="meter" style="margin-top:10px"><i style="width:${Math.round(x.att || 0)}%"></i></div></div>
-    <div class="card" style="grid-column:span 2;min-width:0"><div class="row" style="justify-content:space-between"><span class="k">From the notes on the sheets</span>${S.editProfile ? "" : '<button class="link small noprint" data-act="profedit">Edit focus and skills</button>'}</div><div style="margin-top:6px">${profile}</div></div></div>`;
+    <div class="card" style="grid-column:1/-1;min-width:0"><div class="row" style="justify-content:space-between"><span class="k">Focus and skills</span>${S.editProfile ? "" : '<button class="link small noprint" data-act="profedit">Edit focus and skills</button>'}</div><div style="margin-top:6px">${profile}</div></div></div>`;
   h += `<section class="card" style="margin-bottom:12px"><div class="row" style="justify-content:space-between"><h2 class="h2">Week by week</h2><span class="small muted">Column: right, of what was tried · bar: share of the work done</span></div>
     <div class="scroll" style="margin-top:10px" data-keepx="wbw" data-endx="1"><div class="cols">${ws.map(({ w, cell }) => `<button class="wcol" style="border:0;background:none;padding:0" data-act="cell" data-sid="${st.id}" data-week="${w}"><div class="p ${cell.acc != null && cell.acc < 60 ? "low" : "muted"}">${cell.acc != null ? Math.round(cell.acc) + "%" : cell.miss ? "Missing" : cell.abs ? "Absent" : ""}</div><div class="well">${cell.acc != null ? `<i style="height:${Math.max(3, cell.acc)}%;background:var(--q${band(cell.acc)})"></i>` : ""}</div><div class="att"><i style="width:${cell.att != null ? Math.round(cell.att) : 0}%"></i></div><div class="l">Wk ${w}</div></button>`).join("")}</div></div></section>`;
   h += `<section class="card" style="margin-bottom:12px"><h2 class="h2" style="margin-bottom:4px">Sheets, newest first</h2>${shown.map(({ col, m }) => {
@@ -724,7 +871,25 @@ function viewStudent() {
   const hwc = c.columns.filter(col => isComp(col) && !colX(col));
   if (hwc.length) h += `<section class="card"><h2 class="h2">Homework (completion only)</h2><div class="row" style="gap:6px;margin-top:10px">${hwc.map(col => { const s = (mark(col.id, st.id) || {}).status;
     return `<button class="stchip ${s === "done" || s === "partial" ? "ok" : s === "notin" ? "bad" : ""}" style="min-height:34px" data-act="edit" data-sid="${st.id}" data-cid="${col.id}">Wk ${col.week} · ${esc(short(col.title))}: ${esc(LABEL[s] || "No mark")}</button>`; }).join("")}</div></section>`;
+  h += notesSection(c, st);
   return h;
+}
+// Everything said about one student, newest first: the notes added here and the notes on each
+// of their marks. It builds up all year, so report cards start from it.
+function notesFor(c, sid) {
+  const out = ((S.d.snotes || {})[sid] || {}).items || [];
+  const list = out.map(n => ({ own: true, id: n.id, at: n.at, text: n.text, col: n.col ? c.columns.find(x => x.id === n.col) : null }));
+  for (const col of c.columns) { const m = mark(col.id, sid); if (m && m.note) list.push({ own: false, at: m.at || col.due || "", text: m.note, col, by: m.by }); }
+  return list.sort((a, b) => String(b.at).localeCompare(String(a.at)));
+}
+function notesSection(c, st) {
+  const list = notesFor(c, st.id), ro = S.save === "ro" ? " disabled" : "";
+  const when = at => at ? new Date(at).toLocaleDateString([], { month: "short", day: "numeric" }) : "";
+  return `<section class="card notes" style="margin-top:12px"><div class="row" style="justify-content:space-between"><h2 class="h2">Notes · for report cards</h2>${list.length ? `<button class="btn sunk noprint" data-act="copynotes" data-sid="${st.id}">${I.copy}Copy all</button>` : ""}</div>
+    <div class="addnote noprint"><textarea id="sn-${st.id}" placeholder="Anything worth remembering about ${esc(first(st.name))}. Claude reads these too."${ro}></textarea>
+      <div class="row"><select id="snc-${st.id}" aria-label="About"><option value="">About: in general</option>${c.columns.slice().reverse().map(col => `<option value="${col.id}">${esc((ABBR[col.kind] || col.kind) + (col.week != null ? " wk " + col.week : "") + " · " + short(col.title))}</option>`).join("")}</select><button class="btn primary" data-act="snadd" data-sid="${st.id}"${ro}>Add note</button></div></div>
+    ${(S.allNotes ? list : list.slice(0, 8)).map(n => `<div class="nrow"><div class="small muted">${esc(when(n.at))}</div><div><div>${esc(n.text)}</div>${n.col ? `<button class="link small" data-act="sheetcol" data-cid="${n.col.id}">${esc(n.col.title)}</button>` : ""}${!n.own ? ` <span class="small muted">· note on the mark${n.by === "claude" ? ", from Claude" : ""}</span>` : ""}</div>${n.own ? `<button class="iconb mini noprint" data-act="sndel" data-sid="${st.id}" data-v="${n.id}" aria-label="Remove this note"${ro}>${I.x}</button>` : "<span></span>"}</div>`).join("") || '<div class="small muted" style="margin-top:8px">No notes yet.</div>'}
+    ${list.length > 8 ? `<button class="link noprint" data-act="allnotes" style="padding:12px 0">${S.allNotes ? "Show the newest 8" : "Show all " + list.length + " notes"}</button>` : ""}</section>`;
 }
 
 /* ---------------------------------------------------------------- one assignment */
@@ -732,11 +897,11 @@ function viewSheet() {
   const f = findCol(S.cid), c = f.c, col = f.col; S.course = f.cid;
   const md = S.d.marks[col.id] || {}, xd = colX(col), comp = isComp(col);
   const same = c.columns.filter(x => x.week === col.week);
-  const rows = c.students.map(s => { const m = mark(col.id, s.id); return { s, m, p: isScored(m) ? pct(m, col) : null }; });
+  const rows = c.students.map(s => { const m = mark(col.id, s.id); return { s, m, p: isScored(m) ? (col.kind === "TEST" ? testPct(m, col) : pct(m, col)) : null }; });
   const sc = rows.filter(r => r.p != null), avg = sc.length ? sc.reduce((a, r) => a + r.p, 0) / sc.length : null;
-  const tools = `<button class="btn noprint" data-act="excuse" data-cid="${col.id}">${xd ? "Count this assignment again" : "Excuse for the whole class"}</button>`;
+  const tools = `${col.kind !== "XT" ? `<button class="btn primary noprint" data-act="qscore" data-cid="${col.id}">${I.check}Score the class</button>` : ""}<button class="btn noprint" data-act="excuse" data-cid="${col.id}">${xd ? "Count this assignment again" : "Excuse for the whole class"}</button>`;
   let h = head({ back: ["grades", "Grades"], eyebrow: `${esc(c.name)} · Week ${col.week ?? ""}`, title: esc(col.title), tools,
-    lede: `${KIND[col.kind] || col.kind}${col.due ? " · due " + esc(col.due) : ""}${!comp && col.items ? ` · ${col.items.length} problems` : ""}${!comp ? ` · ${sc.length} of ${c.students.length} scored` : ""}` });
+    lede: `${KIND[col.kind] || col.kind}${col.due ? " · due " + esc(col.due) : ""}${!comp && col.items ? ` · ${col.items.length} problems` : ""}${!comp ? ` · ${sc.length} of ${c.students.length} scored` : ""}${col.kind === "TEST" ? ` · out of ${esc(col.outOf ?? "?")}, counts toward the grade` : col.kind === "HW" ? " · counts toward the grade" : " · shown, doesn't count"}` });
   if (same.length > 1) h += `<div class="strip noprint" style="margin-bottom:12px">${same.map(x => `<button class="chip" data-act="sheetcol" data-cid="${x.id}" aria-pressed="${x.id === col.id}">${x.kind !== "CW" ? (KIND[x.kind] || x.kind) + " · " : ""}${esc(x.title)}</button>`).join("")}</div>`;
   if (xd) h += `<div class="note-soft" style="margin-bottom:12px">Excused for everyone. It's left out of every average, homework count and missing count. The marks are kept, so counting it again brings them back.</div>`;
   if (col.q) h += `<div class="exit" style="margin-bottom:12px">${rich(col.q)}${col.a ? `<div class="a">${rich(col.a)}</div>` : ""}</div>`;
@@ -864,6 +1029,35 @@ function renderSheet() {
       <div style="min-width:0"><div class="small" style="font-weight:600">${esc(x.label)}</div><div class="small muted" style="font-family:var(--mono,ui-monospace,monospace);overflow-wrap:anywhere;user-select:all;-webkit-user-select:all">${esc(folderPath(x.dir))}</div></div></div>`).join("");
     html = sheetFrame(esc(h.dir || ""), `Handouts · ${esc(c.name)}`, files + `<div class="k" style="margin:18px 0 0">Folder on the NAS</div>${copies}`,
       `<p class="small muted" style="margin:0;text-align:center">Each file opens in a new tab, to read or print. A copied path pastes into Finder's Go to Folder (⇧⌘G).</p>`);
+  } else if (s.t === "qscore") {
+    const f = findCol(s.cid); if (!f) { S.sheet = null; host.innerHTML = ""; return; }
+    const { c, col } = f, comp = isComp(col), out = qOut(c, col), ro = S.save === "ro" ? " disabled" : "";
+    const opts = comp ? [["done", "✓", "Done"], ["partial", "½", "Partial"], ["notin", "✗", "Not in"], ["absent", "–", "Away"]] : [["missing", "M", "Missing"], ["absent", "A", "Absent"]];
+    const body = `<div class="qhead"><label class="k" for="qout">${comp ? "Accuracy out of" : "Out of"}</label><input id="qout" data-qs="out" inputmode="decimal" value="${esc(out)}"${ro}>
+        <span class="small muted">${comp ? "Leave a score blank to count it on completion alone." : col.kind === "TEST" ? "The whole test, so blanks count against it." : ""}</span></div>
+      ${c.students.map((st, i) => { const m = mark(col.id, st.id) || {};
+        return `<div class="qrow"><span class="qn">${esc(st.name)}${isClaude(m) ? ' <span class="dia"></span>' : ""}</span>
+          <div class="xseg ${comp ? "hwseg" : "qseg"}">${opts.map(([v, tx, l]) => `<button class="${v === "missing" ? "notin" : v}" data-act="qstat" data-v="${v}" data-sid="${st.id}" data-cid="${col.id}" aria-pressed="${m.status === v}" aria-label="${esc(st.name)}: ${l}"${ro}>${tx}</button>`).join("")}</div>
+          <input class="qp" data-qs="pts" data-i="${i}" data-sid="${st.id}" data-cid="${col.id}" inputmode="decimal" enterkeyhint="next" value="${m.pts ?? ""}" placeholder="—" aria-label="${esc(st.name)}: score out of ${esc(out)}"${ro}>
+          <input class="qnote" type="text" data-qs="note" data-sid="${st.id}" data-cid="${col.id}" value="${esc(m.note || "")}" placeholder="Note on ${esc(first(st.name))}'s ${esc(ABBR[col.kind] === "WS" ? "sheet" : (KIND[col.kind] || "work").toLowerCase())}" aria-label="${esc(st.name)}: note"${ro}></div>`; }).join("")}`;
+    html = sheetFrame(`${esc(KIND[col.kind] || col.kind)} · ${esc(c.name)}${col.week != null ? " · Week " + col.week : ""}`, esc(col.title), body,
+      `<p class="small muted" style="margin:0;text-align:center">Type a score and press Enter for the next student. Each one saves. A blank stays blank, never zero.</p><button class="btn primary block" data-act="close">Done</button>`);
+  } else if (s.t === "newcol") {
+    const test = s.kind === "TEST", iso = isoOf(), cls = Object.entries(school().classes || {}).find(([, x]) => x.course === S.course);
+    html = sheetFrame(`${esc((courseOf(S.course) || {}).name || "")}`, test ? "New test" : "New homework",
+      `<div class="stack"><label class="k" for="nct">What it is</label><input type="text" id="nct" maxlength="120" placeholder="${test ? "e.g. Unit 3 test" : "e.g. Workbook pg 52–53"}" enterkeyhint="done">
+        ${test ? `<label class="k" for="ncd">Date</label><input type="date" id="ncd" value="${iso}">
+          <label class="k" for="nco">Out of</label><input type="text" id="nco" inputmode="decimal" value="100">`
+        : `<label class="k" for="nca">Handed out</label><input type="date" id="nca" value="${iso}"><label class="k" for="ncd">Due</label><input type="date" id="ncd" value="${cls ? nextMeet(cls[0], iso) : isoAdd(iso, 1)}">`}
+        <p class="small muted" style="margin:0">${test ? "Tests count toward the grade. Next, you score it here, student by student." : "Homework counts on completion, plus accuracy when you give it a score."}</p></div>`,
+      `<button class="btn primary block" data-act="colsave" data-v="${test ? "TEST" : "HW"}">Add and score it</button>`);
+  } else if (s.t === "snote") {
+    const f = findStudent(s.sid); if (!f) { S.sheet = null; host.innerHTML = ""; return; }
+    const recent = notesFor(f.c, s.sid).slice(0, 3);
+    html = sheetFrame(`Note · ${esc(f.c.name)}`, esc(f.s.name),
+      `<textarea id="snq" style="min-height:120px" placeholder="What you're seeing. It's kept for report cards, and Claude reads it."></textarea>
+       ${recent.length ? `<div class="k" style="margin:14px 0 4px">Lately</div>${recent.map(n => `<div class="small" style="padding:6px 0;border-top:1px solid var(--line)">${esc(n.text)}${n.col ? ` <span class="muted">· ${esc(short(n.col.title))}</span>` : ""}</div>`).join("")}` : ""}`,
+      `<button class="btn primary block" data-act="snsave" data-sid="${s.sid}">Save note</button><button class="link small" style="text-align:center" data-act="student" data-sid="${s.sid}">Open ${esc(first(f.s.name))}'s page</button>`);
   } else if (s.t === "conflict") {
     const cf = S.conflicts[0]; if (!cf) { S.sheet = null; host.innerHTML = ""; return; }
     const f = findStudent(cf.sid), col = findCol(cf.col);
@@ -874,12 +1068,35 @@ function renderSheet() {
       `<button class="btn inkb block" data-act="cfmine">Keep mine · ${esc(mineText)}</button><button class="btn sunk block" data-act="cftheirs">Use theirs · ${esc(show(cf.mark))}</button>`);
   }
   host.innerHTML = html;
+  if (s.t === "qscore") { const el = host.querySelector(".sheet"); if (el) el.classList.add("wide"); }
   const sb = host.querySelector(".sb"); if (sb) sb.scrollTop = top;
+}
+
+/* ---------------------------------------------------------------- scoring a whole class */
+// The "out of" a quick-score sheet writes with: what the teacher typed in the sheet, else the
+// column's, else what the marks already carry, else 10 for a homework's accuracy.
+function qOut(c, col) {
+  if (S.sheet && S.sheet.t === "qscore" && S.sheet.outOf != null) return S.sheet.outOf;
+  if (col.outOf) return col.outOf;
+  for (const st of c.students) { const m = mark(col.id, st.id); if (m && m.outOf) return m.outOf; }
+  return isComp(col) ? 10 : "";
+}
+function qSave(t) {
+  const col = colOf(t.dataset.cid), sid = t.dataset.sid, m = mark(col.id, sid) || {}, f = findCol(col.id);
+  if (t.dataset.qs === "note") { if ((m.note || "") !== t.value) writeMark(col, sid, { note: t.value }, { toast: "Note saved" }); return; }
+  const v = t.value.trim();
+  if (v === "") { if (m.pts != null) writeMark(col, sid, { pts: null }, { toast: "Score cleared" }); return; }
+  const n = Number(v), out = Number(qOut(f.c, col));
+  if (!(n >= 0) || n > 1000) { toast("That isn't a score"); t.value = m.pts ?? ""; return; }
+  if (!(out > 0)) { toast("Fill in “out of” first"); t.value = m.pts ?? ""; return; }
+  if (m.pts === n && m.outOf === out) return;
+  const patch = isComp(col) ? { pts: n, outOf: out, ...(COMP[m.status] == null || m.status === "notin" ? { status: "done" } : {}) } : { status: "scored", pts: n, outOf: out };
+  writeMark(col, sid, patch, { toast: `${first((f.c.students.find(x => x.id === sid) || {}).name)} · ${n}/${out}${n > out ? " (over the top)" : ""} · saved` });
 }
 
 /* ---------------------------------------------------------------- actions */
 function go(view, extra = {}) {
-  Object.assign(S, { view, showAll: false, editProfile: false, buf: "" }, extra);
+  Object.assign(S, { view, showAll: false, allNotes: false, editProfile: false, buf: "" }, extra);
   S.sheet = null; $("#sheethost").innerHTML = "";
   render(); window.scrollTo(0, 0);
 }
@@ -921,6 +1138,7 @@ document.addEventListener("click", e => {
     case "filter": S.filter = v; render(); break;
     case "sort": S.sort = S.sort === "low" ? "name" : "low"; render(); break;
     case "showall": S.showAll = !S.showAll; render(); break;
+    case "allnotes": S.allNotes = !S.allNotes; render(); break;
     case "student": go("student", { sid, back: S.view === "grades" ? "grades" : S.view === "student" ? S.back : "students" }); break;
     case "sheetcol": if (cid) go("sheet", { cid }); break;
     case "cell": openSheet({ t: "edit", sid, week: +t.dataset.week }); break;
@@ -964,6 +1182,31 @@ document.addEventListener("click", e => {
     case "profsave": { const val = id => (document.getElementById(id) || {}).value || "", split = s => s.split(",").map(x => x.trim()).filter(Boolean);
       const data = { focus: val("pf").trim(), solid: split(val("ps")), work: split(val("pw")) };
       api("PUT", "api/profile", { sid, data, force: true }).then(j => { S.d.profiles[sid] = j.profile; S.editProfile = false; setSave("saved"); render(); }).catch(err => toast("Couldn't save: " + err.message)); break; }
+    case "jump": { const el = document.getElementById("step-" + v); if (el) el.scrollIntoView({ behavior: "smooth", block: "center" }); break; }
+    case "akind": S.akind = v; LS.set("btb.akind", v); render(); break;
+    case "amiss": S.amiss = !S.amiss; render(); break;
+    case "asgmiss": S.gmode = "asg"; S.amiss = true; LS.set("btb.gmode", "asg"); render(); window.scrollTo(0, 0); break;
+    case "qscore": openSheet({ t: "qscore", cid }); break;
+    case "qstat": { const col = colOf(cid), m = mark(cid, sid) || {}, f = findStudent(sid); if (m.status === v) break;
+      writeMark(col, sid, { status: v }, { toast: `${first(f && f.s.name)} · ${LABEL[v]} · saved` }); break; }
+    case "newcol": openSheet({ t: "newcol", kind: v }); break;
+    case "colsave": { const val = id => ((document.getElementById(id) || {}).value || "").trim(), title = val("nct"), due = val("ncd"), c = courseOf(S.course);
+      if (!title) { toast("Say what it is"); break; }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(due)) { toast("Pick a date"); break; }
+      const wk = (S.d.weeks || []).find(w => w.startsOn && due >= w.startsOn && due <= (w.endsOn || w.startsOn)), week = wk ? wk.week : S.d.week;
+      const done = j => { if (c && !c.columns.some(x => x.id === j.col.id)) c.columns.push(j.col); toast("Added"); openSheet({ t: "qscore", cid: j.col.id }); };
+      if (v === "TEST") { const outOf = Number(val("nco")); if (!(outOf > 0)) { toast("Out of needs a number"); break; } post("api/test", { course: S.course, title, due, outOf, week }, done); }
+      else { const assigned = val("nca"); if (!/^\d{4}-\d{2}-\d{2}$/.test(assigned) || due < assigned) { toast("Due has to be on or after the day it's handed out"); break; } post("api/hw", { course: S.course, title, due, assigned, week }, done); }
+      break; }
+    case "snote": openSheet({ t: "snote", sid }); break;
+    case "snsave": case "snadd": { const ta = document.getElementById(a === "snsave" ? "snq" : "sn-" + sid), text = ((ta || {}).value || "").trim();
+      const col = a === "snadd" ? ((document.getElementById("snc-" + sid) || {}).value || null) : null;
+      if (!text) { toast("Write the note first"); break; }
+      post("api/snote", { sid, text, col }, j => { (S.d.snotes = S.d.snotes || {})[sid] = j.doc; if (a === "snsave") closeSheet(); else render(); toast("Note kept"); }); break; }
+    case "sndel": post("api/snote", { sid, id: v, del: true }, j => { (S.d.snotes = S.d.snotes || {})[sid] = j.doc; render(); toast("Note removed"); }); break;
+    case "copynotes": { const f = findStudent(sid); if (!f) break;
+      const txt = f.s.name + "\n" + notesFor(f.c, sid).map(n => `- ${n.at ? new Date(n.at).toLocaleDateString([], { month: "short", day: "numeric" }) + ": " : ""}${n.text}${n.col ? " (" + n.col.title + ")" : ""}`).join("\n");
+      copyText(txt).then(ok => toast(ok ? "Notes copied" : "Couldn't copy")); break; }
     case "print": window.print(); break;
     case "scan": $("#scanin").click(); break;
     case "undo": undo(); break;
@@ -978,7 +1221,16 @@ document.addEventListener("change", e => {
     const col = colOf(t.dataset.cid), sid = t.dataset.sid, f = t.dataset.f;
     if (f === "inc") writeMark(col, sid, { inc: t.checked });
     else if (f === "note") { if ((mark(col.id, sid) || {}).note !== t.value) writeMark(col, sid, { note: t.value }, { toast: "Note saved" }); }
-    else { const n = t.value.trim() === "" ? null : Number(t.value); if (n !== null && !(n >= 0)) { toast("That isn't a number"); render(); return; } writeMark(col, sid, { [f]: n, ...(isScored(mark(col.id, sid)) ? {} : { status: "scored" }) }, { toast: "Saved" }); }
+    else { const n = t.value.trim() === "" ? null : Number(t.value); if (n !== null && !(n >= 0)) { toast("That isn't a number"); render(); return; }
+      const m = mark(col.id, sid) || {};
+      // A homework score is its accuracy; it keeps the homework's done/partial, it never becomes "scored".
+      const st = isComp(col) ? (n != null && (COMP[m.status] == null || m.status === "notin") ? { status: "done" } : {}) : isScored(m) ? {} : { status: "scored" };
+      writeMark(col, sid, { [f]: n, ...st }, { toast: "Saved" }); }
+  } else if (t.dataset.qs) {
+    if (t.dataset.qs === "out") { const n = Number(t.value); if (n > 0) { S.sheet.outOf = n; toast("Out of " + n); } else { toast("Out of needs a number"); t.value = qOut(findCol(S.sheet.cid).c, colOf(S.sheet.cid)); } }
+    else qSave(t);
+  } else if (t.dataset.cnote) {
+    post("api/classnote", { cls: t.dataset.cnote, date: t.dataset.date, week: S.d.week, day: S.day, text: t.value }, j => { (S.d.cnotes = S.d.cnotes || {})[t.dataset.cnote] = j.doc; toast(t.value.trim() ? "Note saved for Claude" : "Note removed"); });
   } else if (t.dataset.prep) {
     post("api/prep", { week: S.d.week, id: t.dataset.prep, on: t.checked }, j => { S.d.prep = j.prep; render(); });
   } else if (t.dataset.req !== undefined && t.dataset.req) {
@@ -993,6 +1245,10 @@ document.addEventListener("change", e => {
 });
 document.addEventListener("keydown", e => {
   if (e.key === "Enter" && e.target.dataset && e.target.dataset.req !== undefined) { e.target.blur(); return; }
+  // Quick score: Enter saves this student and moves to the next one's score.
+  if (e.key === "Enter" && e.target.dataset && (e.target.dataset.qs === "pts" || e.target.dataset.qs === "out")) {
+    e.preventDefault(); const i = e.target.dataset.qs === "out" ? -1 : +e.target.dataset.i; e.target.blur();
+    setTimeout(() => { const nx = document.querySelector(`#sheethost [data-qs="pts"][data-i="${i + 1}"]`); if (nx) { nx.focus(); nx.select(); } }, 0); return; }
   if (e.key === "Escape" && S.sheet) { closeSheet(); return; }
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement || {}).tagName || "");
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z" && !typing) { e.preventDefault(); undo(); return; }

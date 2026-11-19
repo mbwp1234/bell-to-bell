@@ -32,6 +32,8 @@ Gradebook/profiles/<id>.json    { focus, solid:[], work:[] }
 Gradebook/inbox/                scans from the Scan button
 Gradebook/scans/<column>/       scans that have been scored
 state/                          prep ticks and warm-up swaps (the app's own)
+Gradebook/notes/<id>.json       { items:[{id, at, by, text, col?}] } notes on one student, for report cards
+Notes/<class>.json              { notes:[{date, week, day, text, by, at}] } the teacher's note on each class day
 requests.json                   notes typed into the app for whoever plans next
 activity.jsonl                  one line per change
 ```
@@ -58,3 +60,13 @@ A mark: `status` (`scored missing absent excused nopage` / homework `done partia
 wrong, `-` blank), and `by`/`at`/`checked`/`conf`. A mark written by another tool with
 `by: "claude"` and `checked: false` shows a diamond until it is checked in the app. A blank is
 never zero.
+
+## Grading
+
+`school.json` → `grading` (optional): `{ "tests": 60, "homework": 40, "completion": 70, "accuracy": 30 }`.
+The grade counts `TEST` and `HW` columns only. A test is `pts` over the whole test (the larger of
+the column's and the mark's `outOf`), summed across tests. A homework is completion (`done` 1,
+`partial` ½, `notin` 0) mixed with accuracy (`pts / outOf`) by `completion : accuracy`; with no
+`pts` it counts on completion alone. `absent`, `excused`, `nopage` and no mark are left out, never
+zero. A `missing` test is left out of the average and counted as missing. `CW`, `SUB`, `XP` and
+`XT` are shown and never counted.
