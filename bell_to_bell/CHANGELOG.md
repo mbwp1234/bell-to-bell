@@ -1,3 +1,35 @@
+## 0.7.0
+The UX audit, as approved on the mockup canvas.
+- **One app bar that never moves.** Today · Week · Grades · Students · Review, then the save
+  status and a theme icon. Page actions (+ Test, Scan, the day and week steppers, Show grades)
+  sit with the page title. "Saved" no longer shows the seconds; hover it for the time.
+- **Review** replaces From Claude and is a section of its own, with its count. Claude's marks are
+  reviewed by *change*: the same student excused across 26 assignments for one reason is one
+  card and one **Approve 26**. Scored marks stay grouped by assignment; the ones Claude isn't
+  sure of are always listed one by one, with the scan. "Looks right" is now **Approve**.
+  Dates and assignment ids in Claude's notes read as "Thu Nov 19" and the assignment's title.
+- **"Now" is the accent colour.** Rust only ever means a problem. The current class is filled,
+  the bar fills to the present, and the step running now is tinted, with no second progress bar.
+- **Today:** the day is a stepper beside the title, so the classes are the only row under it.
+  Worksheets are all one weight, with a readable name and the file as a caption; the one the
+  print list names says *Print today*. The week's note lives on Week.
+- **Week:** five day columns on a laptop, today tinted and past days quieter. "Needs a plan" is a
+  button, and the subtitle's count jumps to the notes for Claude. Ticked prep folds into one line.
+- **Grades:** "How the grade counts" opens the policy instead of it always being on screen. The
+  dot grid has a legend, solid colours and a ring for missing work; a week with nothing set shows
+  as a hatched "no work" column instead of disappearing. Trends are numbers (↗ +6 pts), not
+  "Improving". Slipping says what its number is and shows the grade beside it.
+- **Assignments:** columns grouped by week with the type under it; columns that don't count are
+  shaded. The name and the Owes / Grade columns are solid with an edge, and the grid snaps to
+  whole columns. Scores under 70 are bold rust and the 70s amber ink, no pale greens. Owes shows
+  0, not a dash. "Only students who owe work" is a switch of its own.
+- **One week:** homework is marked right in the cell (Done / Partial / Not in, ⋯ for the rest),
+  with **Mark the other N done**. Columns size to their content. The Week column shows the
+  homework's share done, or Ex. The status picker is one row of five.
+- **Students:** homework squares are only the marked ones (excused and away are counted in
+  words); the dashed line is the class average; a card that needs a check-in says why; filter
+  chips plus a Sort menu (name, lowest grade, most missing).
+
 ## 0.6.1
 - The week's note moves out of the eyebrow onto its own line, so the class name sits right under a short label.
 - The homework and print boxes in the side column match the worksheets card, and the column is a touch wider.
